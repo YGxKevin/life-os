@@ -129,6 +129,7 @@
     state.domains.forEach((d, i) => { d.c ||= DOMAIN_C0[d.code] || PALETTE[i % PALETTE.length]; });
     state.sfx ||= { voice: 'bass', vol: 3, pitch: true };
     state.sfx.miss ||= 'thump';
+    if (typeof state.sfx.cash !== 'string') state.sfx.cash = '';   // 購買的聲音：''＝收銀機（預設）、'none'＝無聲、'file:檔名'＝sounds/ 裡的音檔
     O = state.opts;
     /* 錢包：第一次啟用時，已經完成的東西記在 base 裡，不補發獎勵 */
     if (!state.wallet) { state.wallet = { rates: JSON.parse(JSON.stringify(RATE0)), base: [], log: [], habitV: 1, pmV: 1 }; state.wallet.base = rewardables().map((w) => w[0]); }
@@ -538,12 +539,12 @@
       }
     }).catch(() => {});
   }
-  function playSample(ctx, key, base, level) {
+  function playSample(ctx, key, base, level, boost = 1) {
     const go = (buf) => {
       const n = ctx.createBufferSource(), g = ctx.createGain();
       n.buffer = buf;
-      n.playbackRate.value = state.sfx.pitch ? Math.sqrt(base / 220) : 1;   // 音高跟位置時只小幅變調，保留原本的音色
-      g.gain.value = buf.kosNorm * level;
+      n.playbackRate.value = state.sfx.pitch && boost === 1 ? Math.sqrt(base / 220) : 1;   // 音高跟位置時只小幅變調，保留原本的音色（購買聲不變調）
+      g.gain.value = buf.kosNorm * level * boost;
       n.connect(g); g.connect(ctx.destination); n.start();
     };
     if (sampleBuf[key] && sampleBuf[key].kosCtx === ctx) return go(sampleBuf[key]);   // 音檔解碼結果跟著引擎走：換新引擎就重新解碼
@@ -886,8 +887,10 @@
         <div class="snd-r"><span>音效</span>${seg('muted', [[0, '開'], [1, '關']], +state.muted)}</div>
         <div class="snd-r"><span>音量</span>${seg('vol', [1, 2, 3, 4, 5].map((n) => [n, n]), c.vol)}</div>
         <div class="snd-r"><span>音高</span>${seg('pitch', [[1, '跟位置'], [0, '固定']], +c.pitch)}</div>
-        <div class="snd-l">音色（點了會試聽）${seg('target', [['voice', '按到東西'], ['miss', '沒按到']], target)}</div>
-        <div class="pop-list">${[...Object.entries(VOICES).map(([k, v]) => [k, v.name, v.file ? 'c-yel' : 'c-cyan']), ['none', '（無聲）', '']].map(([k, n, col]) => `<div class="pop-row"><button type="button" data-novoice class="pop-opt ${c[target] === k ? 'on' : ''}" data-set="tone" data-v="${esc(k)}" aria-pressed="${c[target] === k}"><i class="sw ${col}"></i><span>${esc(n)}</span></button></div>`).join('')}</div>`;
+        <div class="snd-l">音色（點了會試聽）${seg('target', [['voice', '按到東西'], ['miss', '沒按到'], ['cash', '購買']], target)}</div>
+        <div class="pop-list">${(target === 'cash'
+          ? [['', '收銀機', 'c-cyan'], ...Object.entries(VOICES).filter(([, v]) => v.file).map(([k, v]) => [k, v.name, 'c-yel']), ['none', '（無聲）', '']]
+          : [...Object.entries(VOICES).map(([k, v]) => [k, v.name, v.file ? 'c-yel' : 'c-cyan']), ['none', '（無聲）', '']]).map(([k, n, col]) => `<div class="pop-row"><button type="button" data-novoice class="pop-opt ${c[target] === k ? 'on' : ''}" data-set="tone" data-v="${esc(k)}" aria-pressed="${c[target] === k}"><i class="sw ${col}"></i><span>${esc(n)}</span></button></div>`).join('')}</div>`;
     };
     openPop(anchor, render);
     pop.onclick = (e) => {
@@ -900,7 +903,8 @@
       else state.sfx[target] = v;
       save(); updateHud(); render(); placePop(anchor);
       [...pop.querySelectorAll(`[data-set="${k}"]`)].find((x) => x.dataset.v === v)?.focus();
-      lastKey = 0; keySound(lastX, k === 'target' || k === 'tone' ? target : 'voice');
+      if (target === 'cash' && (k === 'target' || k === 'tone')) { primeCash(); kaching(); }
+      else { lastKey = 0; keySound(lastX, k === 'target' || k === 'tone' ? target : 'voice'); }
     };
     pop.querySelector('.pop-opt.on')?.focus();
   }
@@ -1127,8 +1131,10 @@
     loadCash()?.then(() => { if (cashData && actx && actx.state === 'running') decodeCash(actx).catch(() => {}); });
   }
   function kaching() {
-    if (state.muted) return;
+    if (state.muted || state.sfx.cash === 'none') return;
     const lv = VOL[state.sfx.vol] ?? 1; if (!lv) return;
+    const own = VOICES[state.sfx.cash];             // 自己選的音檔（sounds/）；檔案不見了就回到收銀機
+    if (own?.file) return audio((ctx) => playSample(ctx, state.sfx.cash, 220, lv, 2.8));
     audio((ctx) => {
       if (!cashData) { loadCash(); return cashSound(ctx, lv); }
       decodeCash(ctx).then((buf) => {
