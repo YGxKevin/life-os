@@ -11,7 +11,7 @@
      真的要重畫時，「新增」欄位打到一半的字和游標會帶過去；正在選中文字（輸入法組字）就先不畫，選完補畫。 */
   const painted = new WeakMap();
   let composing = false;
-  const DRAFT = 'form[data-form] input[name="name"]';
+  const DRAFT = 'form[data-form] [name="name"]';
   function paint(el, html) {
     if (!el || painted.get(el) === html) return false;
     const act = document.activeElement, mine = !!act && el.contains(act);
@@ -20,8 +20,8 @@
     const drafts = [...el.querySelectorAll(DRAFT)].map((i) => [key(i), i.value]).filter(([, v]) => v);
     const keep = mine && act.matches(DRAFT) ? [key(act), act.selectionStart, act.selectionEnd] : null;
     el.innerHTML = html; painted.set(el, html);
-    const find = (k) => el.querySelector(`form[data-form="${k}"] input[name="name"]`);
-    for (const [k, v] of drafts) { const i = find(k); if (i) i.value = v; }
+    const find = (k) => el.querySelector(`form[data-form="${k}"] [name="name"]`);
+    for (const [k, v] of drafts) { const i = find(k); if (i) { i.value = v; if (i.matches('textarea.auto')) { i.style.height = 'auto'; i.style.height = i.scrollHeight + 4 + 'px'; } } }
     const i = keep && find(keep[0]);
     if (i) { i.focus({ preventScroll: true }); try { i.setSelectionRange(keep[1], keep[2]); } catch (e) { /* 有些欄位不支援 */ } }
     return true;
@@ -1570,8 +1570,10 @@
   }
   /* 單行欄位字多就自己長高，不要把字截掉 */
   const autoGrow = (el) => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 4 + 'px'; };
-  document.addEventListener('keydown', (e) => {   // 這些欄位是單行的：Enter 收鍵盤，不換行
-    if (e.key === 'Enter' && !e.isComposing && e.target.matches && e.target.matches('textarea.auto')) { e.preventDefault(); e.target.blur(); }
+  document.addEventListener('keydown', (e) => {   // 這些欄位是單行的（字多會換行顯示）：Enter 收鍵盤，新增欄是送出，不換行
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229 || e.shiftKey || !e.target.matches?.('textarea.auto')) return;
+    e.preventDefault();
+    if (e.target.dataset.enter === 'submit') e.target.form?.requestSubmit(); else e.target.blur();
   });
   new MutationObserver(() => box.querySelectorAll('textarea.auto').forEach(autoGrow)).observe(box, { childList: true, subtree: true });
   document.addEventListener('input', (e) => { if (e.target.matches && e.target.matches('textarea.auto')) autoGrow(e.target); });
@@ -1994,9 +1996,9 @@
     else if (f.dataset.form === 'add-habit') state.habits.push({ id: uid('h'), name, log: {} });
     else if (f.dataset.form === 'add-todo') { ui.todoP = fd.get('p'); state.tasks.push(newTask({ name, p: ui.todoP, sched: fd.get('sched') || '' })); }
     else return;
-    f.querySelector('input[name="name"]').value = '';   // 先清空：重畫會把欄位裡的字帶回去
+    f.querySelector('[name="name"]').value = '';   // 先清空：重畫會把欄位裡的字帶回去
     sfx.check(); commit();
-    $(`[data-form="${f.dataset.form}"] input[name="name"]`, dash)?.focus();
+    $(`[data-form="${f.dataset.form}"] [name="name"]`, dash)?.focus();
   });
   dash.addEventListener('toggle', (e) => {
     const d = e.target; if (!d.matches?.('details.grp') || !ui.openGrp) return;
@@ -2245,32 +2247,57 @@
         ${groups.map(([id, name, l]) => { const n = l.filter((t) => t.status !== '已放棄'), shut = fold.has(id || '_'); return `
         <div class="lf-g ${shut ? 'shut' : ''}"><button class="lf-fold" data-act="cat-fold" data-c="${id}" aria-expanded="${!shut}"><i>${shut ? '▸' : '▾'}</i><strong>${esc(name)}</strong></button><span>${n.length ? `${n.filter((t) => t.status === '完成').length}/${n.length}` : '0'}</span>
           ${id ? `<button class="x" data-act="cat-del" data-c="${id}" aria-label="刪除類別「${esc(name)}」">X</button>` : ''}<button class="kadd" data-act="cat-add" data-c="${id}" aria-label="在「${esc(name)}」新增任務">＋</button></div>
-        <div class="lf-tl" data-c="${id}">${shut ? '' : rows(l)}</div>${ui.addCat === id ? `<form class="qadd lf-add" data-form="add-cal"><input class="in grow" name="name" placeholder="＋ ${esc(name)}" autocomplete="off" aria-label="新任務名稱"><span class="lf-ap" role="group" aria-label="優先級">${[0, 1, 2, 3].map((n) => `<button type="button" class="lf-apb p${n} ${(ui.addPri || 0) === n ? 'on' : ''}" data-act="add-pri" data-v="${n}" aria-pressed="${(ui.addPri || 0) === n}" aria-label="${SETS.pri.items()[n].l}">${n ? '!'.repeat(n) : '—'}</button>`).join('')}</span><button class="btn btn-sm">新增</button></form>` : ''}`; }).join('')}
+        <div class="lf-tl" data-c="${id}">${shut ? '' : rows(l)}</div>${ui.addCat === id ? `<form class="qadd lf-add" data-form="add-cal"><textarea class="in grow auto" name="name" rows="1" data-enter="submit" enterkeyhint="send" placeholder="＋ ${esc(name)}" autocomplete="off" aria-label="新任務名稱"></textarea><span class="lf-ap" role="group" aria-label="優先級">${[0, 1, 2, 3].map((n) => `<button type="button" class="lf-apb p${n} ${(ui.addPri || 0) === n ? 'on' : ''}" data-act="add-pri" data-v="${n}" aria-pressed="${(ui.addPri || 0) === n}" aria-label="${SETS.pri.items()[n].l}">${n ? '!'.repeat(n) : '—'}</button>`).join('')}</span><button class="btn btn-sm">新增</button></form>` : ''}`; }).join('')}
         <form class="qadd" data-form="add-cat"><input class="in grow" name="name" placeholder="＋ 新類別" autocomplete="off" aria-label="新類別名稱"><button class="btn btn-sm">新增</button></form></div>`);
   }
 
-  /* 拖曳排序：按住任務左邊的握把，只能在同一個類別、同一個優先級裡換位置；放開後把那一組的順序寫進 ord */
-  document.addEventListener('pointerdown', (e) => {
-    const h = e.target.closest('#lf-cal [data-drag]'); if (!h || e.button > 0) return;
-    const item = h.closest('.lf-ti'), list = item.parentElement, g = item.dataset.g;
+  /* 拖曳排序（任務、子任務共用）：按住握把上下拖，只跟旁邊「同一組」的換位置。
+     一律搬旁邊那個元素，拖著的元素不離開 DOM（不然會失去 pointer capture，放開收不到 pointerup）。
+     放開時 done(有沒有動過, 這一組現在的順序)。拖曳中 ui.drag = true，renderCal() 會跳過不重畫 */
+  function dragRow(e, h, item, same, done) {
+    const list = item.parentElement;
     e.preventDefault(); ui.drag = true;
     try { h.setPointerCapture(e.pointerId); } catch (er) { /* 沒有也沒關係 */ }
     let y0 = e.clientY, moved = false;
     item.classList.add('lf-drag');
-    const sib = (up) => { const el = up ? item.previousElementSibling : item.nextElementSibling; return el && el.classList.contains('lf-ti') && el.dataset.g === g ? el : null; };
+    const sib = (up) => { const el = up ? item.previousElementSibling : item.nextElementSibling; return el && same(el) ? el : null; };
     const move = (ev) => {
       let dy = ev.clientY - y0, n;
       while ((n = sib(false)) && dy > n.offsetHeight / 2) { const hh = n.offsetHeight; list.insertBefore(n, item); y0 += hh; dy -= hh; moved = true; sfx.tick(); }
-      while ((n = sib(true)) && dy < -n.offsetHeight / 2) { const hh = n.offsetHeight; list.insertBefore(n, item.nextSibling); y0 -= hh; dy += hh; moved = true; sfx.tick(); }   // 一律搬旁邊那個，拖著的元素不離開 DOM（不然會失去 pointer capture）
+      while ((n = sib(true)) && dy < -n.offsetHeight / 2) { const hh = n.offsetHeight; list.insertBefore(n, item.nextSibling); y0 -= hh; dy += hh; moved = true; sfx.tick(); }
       item.style.transform = `translateY(${dy}px)`;
     };
     const end = () => {
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end);
       item.style.transform = ''; item.classList.remove('lf-drag'); ui.drag = false;
-      if (moved) { [...list.children].filter((x) => x.dataset.g === g).forEach((x, i) => { const t = task(x.dataset.id); if (t) t.ord = i; }); sfx.check(); commit(); }
-      else renderCal();
+      done(moved, [...list.children].filter(same));
     };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
+  }
+  /* 子任務照畫面上的順序排回 t.subs（只排有出現在畫面上的，其他的照原本的位置留在後面） */
+  function orderSubs(t, ids) {
+    const by = new Map((t.subs || []).map((q) => [q.id, q]));
+    t.subs = [...ids.map((id) => by.get(id)).filter(Boolean), ...(t.subs || []).filter((q) => !ids.includes(q.id))];
+  }
+  document.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    /* 任務：同一個類別、同一個優先級裡換位置；放開後把那一組的順序寫進 ord */
+    let h = e.target.closest('#lf-cal [data-drag]');
+    if (h) {
+      const item = h.closest('.lf-ti'), g = item.dataset.g;
+      return dragRow(e, h, item, (x) => x.classList.contains('lf-ti') && x.dataset.g === g, (moved, l) => {
+        if (moved) { l.forEach((x, i) => { const t = task(x.dataset.id); if (t) t.ord = i; }); sfx.check(); commit(); } else renderCal();
+      });
+    }
+    /* 子任務：只在任務視窗裡排（11/22 使用者要求：主畫面不能拖，要點進任務才能拖） */
+    h = e.target.closest('#modal-box [data-sdrag]');
+    if (h) {
+      const t = task(h.dataset.sdrag); if (!t) return;
+      return dragRow(e, h, h.closest('.trow'), (x) => x.matches('.trow'), (moved, l) => {
+        if (moved) { orderSubs(t, l.map((x) => x.dataset.sid)); sfx.check(); commit(); }
+        modalCtl?.rerender();
+      });
+    }
   });
 
   /* 任務詳情：一次設定好日期、類別、優先級、子任務；「移動到／複製到」讓同一件事不用重打 */
@@ -2296,7 +2323,7 @@
       const done = t.status === '完成', drop = t.status === '已放棄';
       box.innerHTML = `
         <div class="m-head"><span class="rt-head">TASK</span><button class="x" data-act="close" aria-label="關閉">X</button></div>
-        <input class="in in-title" data-f="name" value="${esc(t.name)}" placeholder="任務名稱" aria-label="任務名稱">
+        <textarea class="in in-title auto" data-f="name" rows="1" placeholder="任務名稱" aria-label="任務名稱">${esc(t.name)}</textarea>
         <textarea class="in tk-note" data-f="note" rows="2" placeholder="詳情" aria-label="詳情">${esc(t.note || '')}</textarea>
         <div class="fgrid tk-grid">
           <div class="fld">日期${dateBtn(t.sched || '', 'data-f="sched" aria-label="日期"')}</div>
@@ -2305,9 +2332,9 @@
           <div class="fld">專案${selBtn('project', proj(t.p) ? t.p : '', 'data-f="p" aria-label="專案"')}</div>
         </div>
         <div class="tk-subs">${(t.subs || []).map((s) => `
-          <div class="trow ${s.done ? 'done' : ''}"><button class="chk ${s.done ? 'on' : ''}" data-act="sub-tog" data-sid="${s.id}" aria-pressed="${!!s.done}" aria-label="子任務完成"></button>
+          <div class="trow ${s.done ? 'done' : ''}" data-sid="${s.id}">${t.subs.length > 1 ? `<span class="lf-h" data-sdrag="${t.id}" aria-hidden="true"></span>` : ''}<button class="chk ${s.done ? 'on' : ''}" data-act="sub-tog" data-sid="${s.id}" aria-pressed="${!!s.done}" aria-label="子任務完成"></button>
             <textarea class="in bare grow auto" data-sf="${s.id}" rows="1" aria-label="子任務名稱">${esc(s.name)}</textarea><button class="x" data-act="sub-del" data-sid="${s.id}" aria-label="刪除子任務">X</button></div>`).join('')}
-          <form class="qadd" data-form="add-sub"><input class="in grow" name="name" placeholder="＋ 子任務" autocomplete="off" aria-label="新子任務"><button class="btn btn-sm">新增</button></form></div>
+          <form class="qadd" data-form="add-sub"><textarea class="in grow auto" name="name" rows="1" data-enter="submit" enterkeyhint="send" placeholder="＋ 子任務" autocomplete="off" aria-label="新子任務"></textarea><button class="btn btn-sm">新增</button></form></div>
         <div class="tk-acts">
           <div class="tk-a"><span>專注</span><button class="h-act" data-act="fo" data-m="pomo">▶ 番茄鐘</button><button class="h-act" data-act="fo" data-m="up">▶ 正計時</button><button class="h-act ${fo ? 'on' : ''}" data-act="fo-add" aria-expanded="${!!fo}">＋ 補登</button></div>
           ${fo ? `<form class="tk-fo" data-form="fo-add">
@@ -2353,7 +2380,7 @@
         }
         const name = String(new FormData(e.target).get('name') || '').trim(); if (!name) return;
         (t.subs ||= []).push({ id: uid('s'), name, done: false });
-        commit(); render(); box.querySelector('[data-form="add-sub"] input').focus();
+        commit(); render(); box.querySelector('[data-form="add-sub"] [name="name"]').focus();
       },
       click(e) {
         const el = e.target.closest('[data-act]'); if (!el) return;
@@ -2529,10 +2556,10 @@
     else if (a === 'cat-fold') { lfFold(el.dataset.c); if (ui.addCat === el.dataset.c) ui.addCat = null; sfx.tick?.(); renderCal(); $(`#lf-cal [data-act="cat-fold"][data-c="${el.dataset.c}"]`)?.focus({ preventScroll: true }); }
     else if (a === 'add-pri') {                    // 新增任務時先選優先級：選了就一直用，直到關掉這個新增欄
       ui.addPri = +el.dataset.v; renderCal();
-      const inp = $('#lf-cal [data-form="add-cal"] input[name="name"]');
+      const inp = $('#lf-cal [data-form="add-cal"] [name="name"]');
       if (inp && !inp.value) inp.focus(); else $(`#lf-cal [data-act="add-pri"][data-v="${ui.addPri}"]`)?.focus({ preventScroll: true });
     }
-    else if (a === 'cat-add') { ui.addPri = 0; ui.addCat = ui.addCat === el.dataset.c ? null : el.dataset.c; if (ui.addCat !== null && lfFold().has(ui.addCat || '_')) lfFold(ui.addCat); renderCal(); $('#lf-cal [data-form="add-cal"] input')?.focus(); }
+    else if (a === 'cat-add') { ui.addPri = 0; ui.addCat = ui.addCat === el.dataset.c ? null : el.dataset.c; if (ui.addCat !== null && lfFold().has(ui.addCat || '_')) lfFold(ui.addCat); renderCal(); $('#lf-cal [data-form="add-cal"] [name="name"]')?.focus(); }
     else if (a === 'cat-del') {
       const i = state.cats.findIndex((c) => c.id === el.dataset.c); if (i < 0) return;
       const [gone] = state.cats.splice(i, 1); commit();

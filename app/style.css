@@ -864,6 +864,10 @@ textarea.grow { min-width: 160px; }
 .lf-t.sub.hh { padding-left: 51px; }
 .lf-ti.lf-drag { z-index: 5; background: var(--panel2); outline: 2px solid var(--yel); }
 .lf-ti.lf-drag .lf-h { cursor: grabbing; opacity: 1; }
+.lf-add textarea.grow { flex: 1 1 260px; }        /* 放不下 260px 就自己一排，優先級和新增換到下一排 */
+.trow.lf-drag { position: relative; z-index: 5; background: var(--panel2); outline: 2px solid var(--yel); }
+.trow.lf-drag .lf-h { cursor: grabbing; opacity: 1; }
+.tk-subs .trow .lf-h { margin: 0; min-height: 26px; }
 .tk-fo, .tk-fl { margin-left: calc(4.2em + 8px); }
 .tk-fo { display: grid; gap: 8px; padding: 10px; background: var(--panel2); border: 2px solid var(--line); border-left: var(--px) solid var(--yel); }
 .tk-fo-t { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; }
