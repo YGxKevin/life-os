@@ -156,8 +156,9 @@ def open_ui(port):
 
 
 def make_shortcut():
-    """第一次開：桌面放一個捷徑（直接開 pythonw，不會閃黑色視窗）"""
-    if not WIN or cfg_get().get("shortcut"):
+    """桌面放一個捷徑（直接開 pythonw，不會閃黑色視窗）。記住建立時資料夾在哪裡：
+    資料夾被搬走（例如從「下載」搬到「文件」），捷徑會指到舊位置打不開，下次從「開啟看板」打開就重建"""
+    if not WIN or cfg_get().get("shortcut") == HERE:
         return
     q = lambda s: s.replace("'", "''")
     pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
@@ -166,8 +167,8 @@ def make_shortcut():
           % (q(pyw), q(os.path.abspath(__file__)), q(HERE), q(os.path.join(HERE, "icon.ico"))))
     try:
         subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], creationflags=NO_WINDOW, timeout=60, check=True)
-        cfg_set(shortcut=True)
-        log("桌面捷徑已建立")
+        cfg_set(shortcut=HERE)
+        log("桌面捷徑已建立：" + HERE)
     except Exception as e:
         log("建立桌面捷徑失敗：%s" % e)
 
