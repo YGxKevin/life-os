@@ -1991,7 +1991,7 @@
     const f = e.target, fd = new FormData(f), name = String(fd.get('name') || '').trim();
     if (!name) return;
     if (f.dataset.form === 'add-inbox') state.projects.push(newProject({ name, status: '收件匣' }));
-    else if (f.dataset.form === 'add-cal') state.tasks.push(newTask({ name, sched: ui.calDay, cat: ui.addCat || '', ...(ui.addPri ? { pri: ui.addPri } : {}) }));
+    else if (f.dataset.form === 'add-cal') { const nd = ui.addCat === ND; state.tasks.push(newTask({ name, sched: nd ? '' : ui.calDay, cat: nd ? '' : ui.addCat || '', ...(ui.addPri ? { pri: ui.addPri } : {}) })); }
     else if (f.dataset.form === 'add-cat') { if (state.cats.some((c) => c.name === name)) { sfx.deny(); return toast(`「${name}」已經有了`); } state.cats.push({ id: uid('c'), name }); }
     else if (f.dataset.form === 'add-habit') state.habits.push({ id: uid('h'), name, log: {} });
     else if (f.dataset.form === 'add-todo') { ui.todoP = fd.get('p'); state.tasks.push(newTask({ name, p: ui.todoP, sched: fd.get('sched') || '' })); }
@@ -2197,6 +2197,9 @@
     return ui.fold;
   }
 
+  /* 「無日期」區（04 最下面）：沒排日期的每日任務放這裡，不會因為不在任何一天而看不到。
+     掛在專案下、又沒有類別的任務不放（那是專案的里程碑／待確認，在專案裡看）。今天才做完的留著到明天 */
+  const ND = '~';
   /* 04 月曆：圓點＝那天有排定的任務（黃＝還沒做完、暗＝都做完）、紅點＝專案期限。點一天看那天的事，下面的印記也跳到那天 */
   function renderCal() {
     if (ui.drag) return;                           // 拖曳中不重畫，放開後再畫
@@ -2219,25 +2222,29 @@
     const list = state.tasks.filter((t) => t.sched === sel || (sel === now && t.sched && t.sched < now && live(t)));
     const fold = lfFold();
     const fmin = {}; for (const f of state.focus) if (f.tid) fmin[f.tid] = (fmin[f.tid] || 0) + f.min;
-    const ago = (t) => { const n = dayDiff(t.sched, now); return t.sched >= sel || !live(t) ? '' : `<span class="sub lf-late">${n === 1 ? '昨天' : n === 2 ? '前天' : mmdd(t.sched)}</span>`; };
+    const ago = (t) => { const n = dayDiff(t.sched, now); return !t.sched || t.sched >= sel || !live(t) ? '' : `<span class="sub lf-late">${n === 1 ? '昨天' : n === 2 ? '前天' : mmdd(t.sched)}</span>`; };
     const subBtn = (t) => { const n = (t.subs || []).length, shut = fold.has('s:' + t.id); return n ? `<button class="lf-sf" data-act="sub-fold" data-id="${t.id}" aria-expanded="${!shut}" aria-label="${shut ? '展開' : '收起'}子任務：${esc(t.name)}">${shut ? '▸' : '▾'} ${t.subs.filter((q) => q.done).length}/${n}</button>` : ''; };
     /* 每個類別裡照優先級（3→0）排；同一級裡照 ord（拖曳排的），沒排過的照建立順序放後面 */
     const idx = new Map(state.tasks.map((t, i) => [t.id, i]));
     const sortL = (l) => l.sort((a, b) => (b.pri || 0) - (a.pri || 0) || (a.ord ?? 1e6 + idx.get(a.id)) - (b.ord ?? 1e6 + idx.get(b.id)));
     let hand = null;   // 這個類別裡可以拖的任務：同一個優先級有 2 個以上
+    let toDay = null;  // 無日期區：每列多一顆「→ 選的那天」
     const row = (t) => `<div class="lf-ti" data-id="${t.id}" data-g="${t.pri || 0}"><div class="lf-t ${t.status === '完成' ? 'done' : ''} ${t.status === '已放棄' ? 'drop' : ''}">${hand ? `<span class="lf-h ${hand.has(t.id) ? '' : 'off'}" ${hand.has(t.id) ? `data-drag="${t.id}"` : ''} aria-hidden="true"></span>` : ''}${chk(t)}${t.pri ? `<i class="lf-pri p${t.pri}">${'!'.repeat(t.pri)}</i>` : ''}
         <span class="grow link" data-act="open-t" data-id="${t.id}" tabindex="0">${esc(t.name || '（未命名）')}${ago(t)}</span>${subBtn(t)}${fmin[t.id] ? `<span class="lf-min">${fmin[t.id]} 分</span>` : ''}${tag(proj(t.p))}
-        ${live(t) ? `<button class="lf-go ${foRun && foRun.tid === t.id ? 'on' : ''}" data-act="t-fo" data-id="${t.id}" aria-label="${foRun && foRun.tid === t.id ? '結束專注' : '開始專注'}：${esc(t.name)}">${foRun && foRun.tid === t.id ? '■' : '▶'}</button>` : ''}</div>${(fold.has('s:' + t.id) ? [] : t.subs || []).map((s) => `
+        ${toDay && live(t) ? `<button class="h-act lf-to" data-act="t-to" data-id="${t.id}" aria-label="排到${toDay.l}：${esc(t.name)}">→${toDay.s}</button>` : ''}${live(t) ? `<button class="lf-go ${foRun && foRun.tid === t.id ? 'on' : ''}" data-act="t-fo" data-id="${t.id}" aria-label="${foRun && foRun.tid === t.id ? '結束專注' : '開始專注'}：${esc(t.name)}">${foRun && foRun.tid === t.id ? '■' : '▶'}</button>` : ''}</div>${(fold.has('s:' + t.id) ? [] : t.subs || []).map((s) => `
         <div class="lf-t sub ${hand ? 'hh' : ''} ${s.done ? 'done' : ''}"><button class="chk ${s.done ? 'on' : ''}" data-act="sub-tog" data-id="${t.id}" data-sid="${s.id}" aria-pressed="${!!s.done}" aria-label="${esc(s.name)}"></button><span class="grow">${esc(s.name)}</span></div>`).join('')}</div>`;
-    const rows = (l) => {
+    const rows = (l, nd) => {
       sortL(l);
       const by = {}; for (const t of l) (by[t.pri || 0] ||= []).push(t.id);
       const ids = Object.values(by).filter((a) => a.length > 1).flat();
       hand = ids.length ? new Set(ids) : null;
-      const out = l.map(row).join(''); hand = null; return out;
+      toDay = nd ? { s: sel === now ? '今天' : mmdd(sel), l: lfLabel(sel) } : null;
+      const out = l.map(row).join(''); hand = toDay = null; return out;
     };
+    const undated = state.tasks.filter((t) => !t.sched && (!proj(t.p) || t.cat) && (live(t) || (t.status === '完成' && t.doneAt && lfDate(t.doneAt) === now)));
     const known = new Set(state.cats.map((c) => c.id));
     const groups = [...state.cats.map((c) => [c.id, c.name, list.filter((t) => t.cat === c.id)]), ['', '未分類', list.filter((t) => !known.has(t.cat))]].filter(([id, , l]) => id || l.length || !state.cats.length);
+    groups.push([ND, '無日期', undated]);
     paint($('#lf-cal'), `
       <div class="lf-cal-h"><button class="h-act" data-act="cal-m" data-n="-1" aria-label="上個月">&lt;</button><strong>${y}年${m}月</strong><button class="h-act" data-act="cal-m" data-n="1" aria-label="下個月">&gt;</button>
         <button class="h-act" data-act="cal-m" data-n="0">今天</button>${late ? chip(`逾期 ${late}`, 'c-mag') : ''}</div>
@@ -2246,8 +2253,8 @@
         ${dues.map((p) => `<div class="row">${tag(p)}<span class="grow link" data-act="open-p" data-id="${p.id}" tabindex="0">${esc(p.name)}</span>${chip('期限', 'c-mag')}</div>`).join('')}
         ${groups.map(([id, name, l]) => { const n = l.filter((t) => t.status !== '已放棄'), shut = fold.has(id || '_'); return `
         <div class="lf-g ${shut ? 'shut' : ''}"><button class="lf-fold" data-act="cat-fold" data-c="${id}" aria-expanded="${!shut}"><i>${shut ? '▸' : '▾'}</i><strong>${esc(name)}</strong></button><span>${n.length ? `${n.filter((t) => t.status === '完成').length}/${n.length}` : '0'}</span>
-          ${id ? `<button class="x" data-act="cat-del" data-c="${id}" aria-label="刪除類別「${esc(name)}」">X</button>` : ''}<button class="kadd" data-act="cat-add" data-c="${id}" aria-label="在「${esc(name)}」新增任務">＋</button></div>
-        <div class="lf-tl" data-c="${id}">${shut ? '' : rows(l)}</div>${ui.addCat === id ? `<form class="qadd lf-add" data-form="add-cal"><textarea class="in grow auto" name="name" rows="1" data-enter="submit" enterkeyhint="send" placeholder="＋ ${esc(name)}" autocomplete="off" aria-label="新任務名稱"></textarea><span class="lf-ap" role="group" aria-label="優先級">${[0, 1, 2, 3].map((n) => `<button type="button" class="lf-apb p${n} ${(ui.addPri || 0) === n ? 'on' : ''}" data-act="add-pri" data-v="${n}" aria-pressed="${(ui.addPri || 0) === n}" aria-label="${SETS.pri.items()[n].l}">${n ? '!'.repeat(n) : '—'}</button>`).join('')}</span><button class="btn btn-sm">新增</button></form>` : ''}`; }).join('')}
+          ${id && id !== ND ? `<button class="x" data-act="cat-del" data-c="${id}" aria-label="刪除類別「${esc(name)}」">X</button>` : ''}<button class="kadd" data-act="cat-add" data-c="${id}" aria-label="在「${esc(name)}」新增任務">＋</button></div>
+        <div class="lf-tl" data-c="${id}">${shut ? '' : rows(l, id === ND)}</div>${ui.addCat === id ? `<form class="qadd lf-add" data-form="add-cal"><textarea class="in grow auto" name="name" rows="1" data-enter="submit" enterkeyhint="send" placeholder="＋ ${esc(name)}" autocomplete="off" aria-label="新任務名稱"></textarea><span class="lf-ap" role="group" aria-label="優先級">${[0, 1, 2, 3].map((n) => `<button type="button" class="lf-apb p${n} ${(ui.addPri || 0) === n ? 'on' : ''}" data-act="add-pri" data-v="${n}" aria-pressed="${(ui.addPri || 0) === n}" aria-label="${SETS.pri.items()[n].l}">${n ? '!'.repeat(n) : '—'}</button>`).join('')}</span><button class="btn btn-sm">新增</button></form>` : ''}`; }).join('')}
         <form class="qadd" data-form="add-cat"><input class="in grow" name="name" placeholder="＋ 新類別" autocomplete="off" aria-label="新類別名稱"><button class="btn btn-sm">新增</button></form></div>`);
   }
 
@@ -2551,6 +2558,11 @@
     const a = el.dataset.act;
     if (a === 'cal-day') { ui.calDay = ui.mkDate = el.dataset.d; ui.mkView = 'day'; renderDash(); }
     else if (a === 'open-t') { if (!busy && !modalCtl) openTask(el.dataset.id); }
+    else if (a === 't-to') {                       // 無日期 → 排到選的那天（有復原）
+      const t = task(el.dataset.id); if (!t) return;
+      t.sched = ui.calDay; sfx.check(); commit();
+      toast(`已排到 ${ui.calDay === ymd(new Date()) ? '今天' : mmdd(ui.calDay)}`, () => { t.sched = ''; commit(); });
+    }
     else if (a === 'sub-tog') { const s = task(el.dataset.id)?.subs?.find((q) => q.id === el.dataset.sid); if (s) { s.done = !s.done; commit(); } }
     else if (a === 'sub-fold') { lfFold('s:' + el.dataset.id); sfx.tick(); renderCal(); $(`#lf-cal [data-act="sub-fold"][data-id="${el.dataset.id}"]`)?.focus({ preventScroll: true }); }
     else if (a === 'cat-fold') { lfFold(el.dataset.c); if (ui.addCat === el.dataset.c) ui.addCat = null; sfx.tick?.(); renderCal(); $(`#lf-cal [data-act="cat-fold"][data-c="${el.dataset.c}"]`)?.focus({ preventScroll: true }); }

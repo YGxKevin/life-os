@@ -33,7 +33,8 @@
       { id: 't4', cat: 'c1', pri: 2, sched: day(0), name: '點任務名稱看詳情',
         note: '左邊方框打勾＝完成，入帳每日任務獎勵；右邊 ▶ 開始專注。\n詳情裡可以改日期、類別、優先級、加子任務，「移動到／複製到」別天。\n類別旁的「＋」新增任務，可以先選優先級 — ! !! !!!。',
         subs: [{ id: 'q1', name: '子任務：打勾完成', done: false }, { id: 'q2', name: '點類別名稱可以收起來', done: false }] },
-      { id: 't5', cat: 'c1', sched: day(0), status: '完成', doneAt: ago(5), name: '完成的任務會留在 07 印記' }
+      { id: 't5', cat: 'c1', sched: day(0), status: '完成', doneAt: ago(5), name: '完成的任務會留在 07 印記' },
+      { id: 't6', name: '沒排日期的任務放在「無日期」，按「→ 今天」排進選的那天' }
     ],
 
     cats: [{ id: 'c1', name: '範例類別' }],

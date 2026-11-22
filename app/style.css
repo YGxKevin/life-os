@@ -808,6 +808,7 @@ details.grp ul { padding-left: 22px; }
 textarea.in.auto { resize: none; overflow: hidden; display: block; }
 textarea.grow { min-width: 160px; }
 .lf-t .lf-late { margin-left: 8px; font-size: 13px; white-space: nowrap; }
+.lf-to { flex: none; padding: 3px 7px; font-size: 13px; white-space: nowrap; }
 .wl-rate span { min-width: 0; }
 @media (max-width: 600px) {
   input, textarea, select { font-size: 16px !important; }   /* iPhone：小於 16px 一點就放大畫面 */
@@ -824,6 +825,7 @@ textarea.grow { min-width: 160px; }
   .in.sel.sm, .in.datebtn.sm { min-height: 32px; font-size: 14px; }
   .lf-go { width: 34px; height: 32px; }
   .lf-sf { min-height: 32px; padding: 4px 8px; }
+  .lf-to { min-height: 32px; padding: 3px 5px; font-size: 12px; }
   .trow { padding: 6px 0; }
   .trow .x { margin-left: auto; }
   .wl-rate { gap: 10px; padding: 8px 0; }
