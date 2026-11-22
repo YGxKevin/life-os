@@ -913,8 +913,44 @@
     { k: 'name', l: '名稱', v: () => NAME() + '//OS', go: () => { closePop(); openName(); } },
     { k: 'sound', l: '音效', v: () => (state.muted ? 'OFF' : 'ON'), go: (a) => openSound(a) },
     { k: 'rates', l: '獎勵金額', v: () => '', go: () => { closePop(); openRates(); } },
+    { k: 'phone', l: '手機', v: () => (lanInfo?.on ? 'ON' : 'OFF'), show: () => !!(lanInfo?.available && lanInfo.local), go: () => { closePop(); openPhone(); } },
     { k: 'ver', l: '版本', v: () => verInfo?.version || '', show: () => !!verInfo?.updatable, go: () => { closePop(); checkUpdate(); } }
   ];
+  /* 手機連線（Windows 版）：開了伺服器會重開、改聽所有網卡；同一個 Wi-Fi 的手機掃 QR code（網址帶鑰匙）進來 */
+  let lanInfo = null;
+  const loadLan = () => fetch('/api/lan', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((v) => { lanInfo = v; return v; }).catch(() => null);
+  function openPhone() {
+    let busyLan = false;
+    const render = () => {
+      const L = lanInfo || {};
+      box.innerHTML = `
+        <div class="m-head"><span class="rt-head">PHONE</span><button class="x" data-act="close" aria-label="關閉">X</button></div>
+        <h3 class="rt-title">手機連線</h3>
+        <div class="snd-r"><span></span><div class="seg">${[[1, '開'], [0, '關']].map(([v, l]) => `<button type="button" data-act="lan" data-v="${v}" class="${+!!L.on === v ? 'on' : ''}" aria-pressed="${+!!L.on === v}" ${busyLan ? 'disabled' : ''}>${l}</button>`).join('')}</div></div>
+        ${busyLan ? '<p class="rt-sub">重新啟動中…</p>'
+          : L.on && L.url ? `<div class="ph-qr"><img src="/api/lan/qr.svg?t=${Date.now()}" alt="手機掃這個 QR code" width="220" height="220"></div>
+            <p class="rt-sub">手機連同一個 Wi-Fi，用相機掃。</p><p class="ph-url">${esc(L.url)}</p>`
+          : L.on ? '<p class="rt-sub">找不到這台電腦的網路位址，先確認有連上 Wi-Fi。</p>'
+          : '<p class="rt-sub">打開後用手機掃 QR code，就能在手機上用。第一次 Windows 防火牆會跳出來，請按「允許」。</p>'}
+        <div class="rt-foot"><span class="sp"></span><button class="btn" data-act="close">完成</button></div>`;
+    };
+    const ctl = openModal('wl', {
+      dismiss: () => !busyLan, render,
+      async click(e) {
+        const el = e.target.closest('[data-act]'); if (!el) return;
+        if (el.dataset.act === 'close') return ctl.close();
+        if (el.dataset.act !== 'lan' || busyLan || +el.dataset.v === +!!lanInfo?.on) return;
+        busyLan = true; render();
+        try { const r = await fetch('/api/lan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on: el.dataset.v === '1' }) }); if (!r.ok) throw new Error(r.status); } catch (er) { busyLan = false; render(); return toast('改不了：' + er.message); }
+        for (let i = 0; i < 40; i++) {                 // 等伺服器重開（約 1–2 秒）
+          await sleep(400);
+          const v = await loadLan();
+          if (v && v.on === (el.dataset.v === '1')) break;
+        }
+        busyLan = false; if (modalCtl === ctl) render();
+      }
+    });
+  }
   /* 版本與自動更新（Windows 版）：伺服器每 6 小時自己檢查；這裡可以立刻檢查一次 */
   let verInfo = null;
   const loadVer = () => fetch('/api/update', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((v) => { verInfo = v; }).catch(() => {});
@@ -2824,7 +2860,7 @@
 
   /* ══════════ 初始化 ══════════ */
   setSave(online ? 'ok' : 'local');
-  if (online) loadVer();
+  if (online) { loadVer(); loadLan(); }
   if (seeded) save();                      // 第一次啟動：把初始資料寫成 data.json
   if (bootOff) { setNet(false); setNet(false); dirty = true; saveTimer = setTimeout(push, 5000); }   // 打開時連不到主機：一直重試，連上就送
   else if (bootPush) { save(); toast('上次沒存到主機的修改已補送'); }

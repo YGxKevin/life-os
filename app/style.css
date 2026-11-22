@@ -203,6 +203,9 @@ button, a, input, textarea, summary, [data-act], [tabindex] { touch-action: mani
 @keyframes nmShake { 0%, 100% { transform: none; } 20% { transform: translateX(-8px); } 40% { transform: translateX(7px); } 60% { transform: translateX(-5px); } 80% { transform: translateX(3px); } }
 .nm-prev { font-family: var(--f-px); color: var(--yel); text-shadow: 2px 2px 0 var(--mag); word-break: break-all; }
 .nm-form .in { text-transform: uppercase; }
+.ph-qr { display: grid; place-items: center; margin: 14px 0 8px; }
+.ph-qr img { width: 220px; height: 220px; image-rendering: pixelated; border: 6px solid #fff; background: #fff; }
+.ph-url { font-size: 13px; color: var(--dim); overflow-wrap: anywhere; user-select: all; text-align: center; }
 .logo-sub { font-family: var(--f-px); font-size: clamp(10px, 1.5vw, 14px); color: var(--cyan); letter-spacing: 6px; margin-top: 18px; }
 .off-date { margin-top: 34px; color: var(--dim); font-size: 18px; letter-spacing: 1px; }
 .off-msg { min-height: 26px; margin: 6px 0 30px; color: var(--grn); }

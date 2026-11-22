@@ -8,6 +8,9 @@
 - GET  /api/sounds 列出 sounds/ 資料夾裡的音檔（音效庫：把 mp3/wav/ogg/m4a 丟進去就會出現在音色清單）
 - GET  /api/update 版本與自動更新狀態；POST /api/update 立刻檢查更新（只有 Windows 版、由 boot.py 啟動時才會更新）
 - POST /api/quit   關掉伺服器（boot.py 啟動時才有，給「關閉看板」用）
+- GET  /api/lan    手機連線狀態；POST /api/lan {"on": true/false} 開關（只有電腦本機能改，改完自動重開）；GET /api/lan/qr.svg 手機掃的 QR code
+  手機連線（只有 Windows 版）：開了就聽所有網卡，同一個 Wi-Fi 的手機掃 QR code 進來。網址帶一組鑰匙 ?k=，
+  第一次進來換成 cookie；沒有鑰匙的一律擋掉（同一個 Wi-Fi 的其他人看不到資料）。關掉再打開會換新鑰匙，舊手機要重掃。
 
 多裝置：每次存檔都會蓋上版本號 _rev 與時間戳 _savedAt。
 裝置存檔時要附上它載入時的版本號；如果這期間別的裝置已經存過（版本號對不上），
@@ -21,6 +24,9 @@ import argparse
 import datetime
 import gzip
 import hashlib
+import hmac
+import secrets
+from http.cookies import SimpleCookie
 import io
 import ipaddress
 import json
@@ -218,6 +224,226 @@ class Updater:
 
 UPDATER = Updater()
 
+NET_FILE = os.path.join(DATA_DIR, "kos-net.json")
+try:
+    with open(NET_FILE, encoding="utf-8") as _f:
+        NET = json.load(_f)
+except (OSError, ValueError):
+    NET = {}
+LAN_OK = os.environ.get("KOS_BOOT") == "1"          # 只有 Windows 版（boot.py 啟動）能開手機連線；Mac 上用 Tailscale
+LAN_ON = LAN_OK and bool(NET.get("lan")) and len(str(NET.get("key") or "")) >= 12
+
+
+def lan_ip():
+    """這台電腦在區網的位址（UDP connect 不會真的送封包，只是問系統走哪張網卡）"""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+    except OSError:
+        ip = ""
+    finally:
+        s.close()
+    return "" if ip.startswith("127.") or ip.startswith("0.") else ip
+
+
+def lan_info(local):
+    ip = lan_ip() if LAN_ON else ""
+    return {"available": LAN_OK, "local": local, "on": LAN_ON, "ip": ip,
+            "url": "http://%s:%d/?k=%s" % (ip, PORT, NET["key"]) if (LAN_ON and ip and local) else ""}
+
+
+# ── QR code（手機連線用）：位元組模式、錯誤更正 M、版本 1–9（最多約 180 字）。照 QR 規格自己寫，不用任何套件 ──
+_QR_EC = {1: (10, [16]), 2: (16, [28]), 3: (26, [44]), 4: (18, [32, 32]), 5: (24, [43, 43]), 6: (16, [27] * 4),
+          7: (18, [31] * 4), 8: (22, [38, 38, 39, 39]), 9: (22, [36, 36, 36, 37, 37])}
+_QR_ALIGN = {1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34], 7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46]}
+
+
+def _gf_mul(x, y):
+    z = 0
+    for i in range(7, -1, -1):
+        z = (z << 1) ^ ((z >> 7) * 0x11D)
+        z ^= ((y >> i) & 1) * x
+    return z & 0xFF
+
+
+def _rs(data, degree):
+    div = [0] * (degree - 1) + [1]
+    root = 1
+    for _ in range(degree):
+        for j in range(degree):
+            div[j] = _gf_mul(div[j], root)
+            if j + 1 < degree:
+                div[j] ^= div[j + 1]
+        root = _gf_mul(root, 2)
+    res = [0] * degree
+    for b in data:
+        f = b ^ res.pop(0)
+        res.append(0)
+        for i in range(degree):
+            res[i] ^= _gf_mul(div[i], f)
+    return res
+
+
+def qr_matrix(text):
+    """回傳 [[bool]]（True＝黑），找不到放得下的版本丟 ValueError"""
+    data = text.encode("utf-8")
+    for ver in range(1, 10):
+        ecl, blocks = _QR_EC[ver]
+        cap = sum(blocks)
+        if 4 + 8 + len(data) * 8 <= cap * 8:
+            break
+    else:
+        raise ValueError("太長了")
+    bits = [0, 1, 0, 0] + [(len(data) >> i) & 1 for i in range(7, -1, -1)]
+    for b in data:
+        bits += [(b >> i) & 1 for i in range(7, -1, -1)]
+    bits += [0] * min(4, cap * 8 - len(bits))
+    bits += [0] * (-len(bits) % 8)
+    words = [int("".join(map(str, bits[i:i + 8])), 2) for i in range(0, len(bits), 8)]
+    pad = 0xEC
+    while len(words) < cap:
+        words.append(pad)
+        pad ^= 0xEC ^ 0x11
+    chunks, k = [], 0
+    for n in blocks:
+        chunks.append(words[k:k + n])
+        k += n
+    eccs = [_rs(c, ecl) for c in chunks]
+    final = []
+    for i in range(max(blocks)):
+        for c in chunks:
+            if i < len(c):
+                final.append(c[i])
+    for i in range(ecl):
+        for e in eccs:
+            final.append(e[i])
+
+    size = 17 + 4 * ver
+    mod = [[False] * size for _ in range(size)]
+    fn = [[False] * size for _ in range(size)]
+
+    def setf(x, y, v):
+        mod[y][x] = v
+        fn[y][x] = True
+
+    for i in range(size):
+        setf(6, i, i % 2 == 0)
+        setf(i, 6, i % 2 == 0)
+    for cx, cy in ((3, 3), (size - 4, 3), (3, size - 4)):
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                x, y = cx + dx, cy + dy
+                if 0 <= x < size and 0 <= y < size:
+                    setf(x, y, max(abs(dx), abs(dy)) not in (2, 4))
+    al = _QR_ALIGN[ver]
+    for i, ay in enumerate(al):
+        for j, ax in enumerate(al):
+            if (i == 0 and j == 0) or (i == 0 and j == len(al) - 1) or (i == len(al) - 1 and j == 0):
+                continue
+            for dy in range(-2, 3):
+                for dx in range(-2, 3):
+                    setf(ax + dx, ay + dy, max(abs(dx), abs(dy)) != 1)
+
+    def draw_format(mask):
+        d = (0 << 3) | mask                            # 錯誤更正 M 的格式碼是 00
+        rem = d
+        for _ in range(10):
+            rem = (rem << 1) ^ ((rem >> 9) * 0x537)
+        b = ((d << 10) | rem) ^ 0x5412
+        bit = lambda i: (b >> i) & 1 == 1
+        for i in range(6):
+            setf(8, i, bit(i))
+        setf(8, 7, bit(6))
+        setf(8, 8, bit(7))
+        setf(7, 8, bit(8))
+        for i in range(9, 15):
+            setf(14 - i, 8, bit(i))
+        for i in range(8):
+            setf(size - 1 - i, 8, bit(i))
+        for i in range(8, 15):
+            setf(8, size - 15 + i, bit(i))
+        setf(8, size - 8, True)
+
+    draw_format(0)
+    if ver >= 7:
+        rem = ver
+        for _ in range(12):
+            rem = (rem << 1) ^ ((rem >> 11) * 0x1F25)
+        b = (ver << 12) | rem
+        for i in range(18):
+            v = (b >> i) & 1 == 1
+            a, c = size - 11 + i % 3, i // 3
+            setf(a, c, v)
+            setf(c, a, v)
+
+    i = 0
+    nbits = len(final) * 8
+    right = size - 1
+    while right >= 1:
+        if right == 6:
+            right = 5
+        for vert in range(size):
+            for j in range(2):
+                x = right - j
+                y = size - 1 - vert if ((right + 1) & 2) == 0 else vert
+                if not fn[y][x] and i < nbits:
+                    mod[y][x] = (final[i >> 3] >> (7 - (i & 7))) & 1 == 1
+                    i += 1
+        right -= 2
+
+    masks = [lambda x, y: (x + y) % 2 == 0, lambda x, y: y % 2 == 0, lambda x, y: x % 3 == 0, lambda x, y: (x + y) % 3 == 0,
+             lambda x, y: (x // 3 + y // 2) % 2 == 0, lambda x, y: x * y % 2 + x * y % 3 == 0,
+             lambda x, y: (x * y % 2 + x * y % 3) % 2 == 0, lambda x, y: ((x + y) % 2 + x * y % 3) % 2 == 0]
+
+    def apply(m):
+        for y in range(size):
+            for x in range(size):
+                if not fn[y][x] and masks[m](x, y):
+                    mod[y][x] = not mod[y][x]
+
+    def penalty():
+        p = 0
+        lines = [row for row in mod] + [[mod[y][x] for y in range(size)] for x in range(size)]
+        for ln in lines:
+            run = 1
+            for k in range(1, size + 1):
+                if k < size and ln[k] == ln[k - 1]:
+                    run += 1
+                else:
+                    if run >= 5:
+                        p += run - 2
+                    run = 1
+            s = "".join("1" if v else "0" for v in ln)
+            p += 40 * (s.count("10111010000") + s.count("00001011101"))
+        for y in range(size - 1):
+            for x in range(size - 1):
+                if mod[y][x] == mod[y][x + 1] == mod[y + 1][x] == mod[y + 1][x + 1]:
+                    p += 3
+        dark = sum(v for row in mod for v in row)
+        p += abs(dark * 20 - size * size * 10) // (size * size) * 10
+        return p
+
+    best, best_p = 0, None
+    for m in range(8):
+        apply(m)
+        draw_format(m)
+        pt = penalty()
+        if best_p is None or pt < best_p:
+            best, best_p = m, pt
+        apply(m)                                       # 再套一次＝還原
+    apply(best)
+    draw_format(best)
+    return mod
+
+
+def qr_svg(text):
+    m = qr_matrix(text)
+    n = len(m) + 8
+    path = "".join("M%d %dh1v1h-1z" % (x + 4, y + 4) for y, row in enumerate(m) for x, v in enumerate(row) if v)
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" shape-rendering="crispEdges">'
+            '<rect width="%d" height="%d" fill="#fff"/><path d="%s" fill="#000"/></svg>' % (n, n, n, n, path))
+
 
 # ── 圖示：64×64 像素畫，照名稱的第一個字畫（Safari 網頁 App、Edge 視窗、分頁小圖示都用這個）──
 # 上面一行小字 //OS、中間大字母（黃＋洋紅陰影）、下面看板的分格進度條。名稱第一個字不是英文／數字就畫 //。
@@ -360,6 +586,43 @@ class Handler(SimpleHTTPRequestHandler):
         if self.command != "GET" or (len(args) > 1 and str(args[1]) >= "400"):
             super().log_message(fmt, *args)
 
+    def _local(self):
+        return self.client_address[0] in ("127.0.0.1", "::1")
+
+    def _gate(self):
+        """手機連線的鑰匙：本機（含 Tailscale Serve 轉進來的）直接過；其他來源要有 cookie，或網址帶對的 ?k= 換成 cookie"""
+        if self._local():
+            return True
+        if LAN_ON:
+            key = NET["key"]
+            c = SimpleCookie()
+            try:
+                c.load(self.headers.get("Cookie") or "")
+            except Exception:
+                pass
+            if "kos_key" in c and hmac.compare_digest(c["kos_key"].value, key):
+                return True
+            k = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("k")
+            if k and hmac.compare_digest(k[0], key):
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.send_header("Set-Cookie", "kos_key=%s; Max-Age=315360000; Path=/; HttpOnly; SameSite=Lax" % key)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return False
+        body = ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+                '<body style="background:#07060d;color:#dcd9f5;font:18px sans-serif;padding:32px;line-height:1.6">'
+                '連不上：請在電腦的看板按右上角齒輪 →「手機」，用手機相機重新掃 QR code。</body>').encode("utf-8")
+        self.send_response(403)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        return False
+
     def _host_ok(self):
         host = (self.headers.get("Host") or "").strip().lower()
         if host.startswith("["):                      # IPv6：[::1]:4173
@@ -369,7 +632,8 @@ class Handler(SimpleHTTPRequestHandler):
         if host in ("localhost", "127.0.0.1", "::1") or host in EXTRA_HOSTS or host.endswith(".ts.net"):
             return True
         try:
-            return ipaddress.ip_address(host) in TAILNET
+            ip = ipaddress.ip_address(host)
+            return ip in TAILNET or (LAN_ON and ip.is_private)   # 手機連線：用區網位址連進來
         except ValueError:
             return False
 
@@ -460,10 +724,25 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_GET(self):
+        if not self._gate():
+            return
         path = self.path.split("?")[0]
         if path.startswith("/api/"):
             if not self._host_ok():
                 return self._json(403, {"error": "forbidden host"})
+            if path == "/api/lan":
+                return self._json(200, lan_info(self._local()))
+            if path == "/api/lan/qr.svg":
+                info = lan_info(self._local())
+                if not info["url"]:
+                    return self._json(404, {"error": "not on"})
+                body = qr_svg(info["url"]).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/svg+xml")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(body) if self.command != "HEAD" else None
             if path == "/api/update":
                 return self._json(200, UPDATER.info())
             if path == "/api/sounds":
@@ -483,7 +762,24 @@ class Handler(SimpleHTTPRequestHandler):
     do_HEAD = do_GET
 
     def _write_state(self):
+        if not self._gate():
+            return
         path = self.path.split("?")[0]
+        if path == "/api/lan":
+            if not (self._host_ok() and self._local() and LAN_OK):
+                return self._json(403, {"error": "只有電腦本機能改"})
+            try:
+                on = bool(json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1000)) or b"{}").get("on"))
+            except ValueError:
+                return self._json(400, {"error": "bad json"})
+            NET.update(lan=on, key=secrets.token_urlsafe(12) if on else "")   # 每次打開換一組新鑰匙
+            with open(NET_FILE + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(NET, f)
+            replace_file(NET_FILE + ".tmp", NET_FILE)
+            self._json(200, {"ok": True, "restart": True})
+            UPDATER.exit_code = UPDATER.RESTART                  # 重開才能換聽的網卡（boot.py 收到 75 會馬上再開）
+            threading.Timer(0.3, self.server.shutdown).start()
+            return
         if path in ("/api/update", "/api/quit"):
             if not self._host_ok():
                 return self._json(403, {"error": "forbidden host"})
@@ -551,7 +847,11 @@ class Server(ThreadingHTTPServer):
 
 
 if __name__ == "__main__":
-    server = Server(("127.0.0.1", PORT), Handler)
+    try:
+        server = Server(("0.0.0.0" if LAN_ON else "127.0.0.1", PORT), Handler)
+    except OSError:
+        LAN_ON = False
+        server = Server(("127.0.0.1", PORT), Handler)
     print("LIFE//OS Life Dashboard → http://localhost:%d/  data: %s" % (PORT, DATA_DIR), flush=True)
     UPDATER.server = server
     if UPDATER.enabled:
