@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#07060d">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="LIFE//OS">
+<title>LIFE//OS</title>
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="crt" id="crt">
+  <div class="screen" id="screen">
+
+    <!-- ░░ 待機畫面 ░░ -->
+    <section class="view v-off" id="v-off">
+      <div class="off-inner">
+        <div class="off-led"><i></i><span id="off-state">STANDBY</span></div>
+        <h1 class="logo glitch" id="logo"></h1>
+        <p class="logo-sub">LIFE DASHBOARD</p>
+        <p class="off-date" id="off-date"></p>
+        <p class="off-msg" id="off-msg"></p>
+        <button class="btn btn-yel btn-big" id="btn-start"><span class="ico">▶</span> 開始今日</button>
+        <p class="off-hint">PRESS ENTER</p>
+      </div>
+    </section>
+
+    <!-- ░░ 開機 / 關機終端機 ░░ -->
+    <section class="view v-term" id="v-term" hidden>
+      <div class="term" id="term"></div>
+    </section>
+
+    <!-- ░░ 看板 ░░ -->
+    <section class="view v-dash" id="v-dash" hidden>
+      <header class="hud">
+        <div class="hud-l">
+          <button class="nav-btn" id="nav-open" aria-label="開啟選單" aria-controls="snav" aria-expanded="false"><i></i><i></i><i></i></button>
+          <span class="logo-s" id="logo-s"></span>
+          <span class="hud-online"><i></i>ONLINE</span>
+        </div>
+        <div class="hud-c">
+          <span class="hud-date" id="hud-date"></span>
+          <span class="hud-clock" id="hud-clock">00:00:00</span>
+          <span class="hud-up">UPTIME <b id="hud-up">00:00</b></span>
+        </div>
+        <div class="hud-r">
+          <button class="chip-btn chip-coin" id="btn-wallet" title="錢包" aria-haspopup="dialog"><svg class="coin" viewBox="0 0 12 12" aria-hidden="true" shape-rendering="crispEdges"><path fill="#b8860b" d="M4 0h4v1h2v1h1v2h1v4h-1v2h-1v1H8v1H4v-1H2v-1H1V8H0V4h1V2h1V1h2z"/><path fill="#fcee0a" d="M4 1h4v1h2v2h1v4h-1v2H8v1H4v-1H2V8H1V4h1V2h2z"/><path fill="#fff7a0" d="M4 2h2v1H4zM3 3h1v2H3z"/><path fill="#b8860b" d="M5 3h2v1h1v1H7V4H5v1h2v1h1v2H7v1H5V8H4V7h1v1h2V7H5V6H4V4h1z"/></svg><b id="coin-amt">$0</b><span class="coin-goal" id="coin-goal" hidden><i></i></span></button>
+          <button class="chip-btn chip-goal" id="btn-goal" hidden aria-haspopup="dialog"><span class="gl-pic" id="goal-pic"></span><span class="gl-main"><span class="gl-bar"><i id="goal-fill"></i></span><b id="goal-pct">0%</b></span></button>
+          <span class="chip-btn" id="save-chip" title="資料存檔狀態"><span class="lbl">DATA</span><b id="save-state">SAVED</b></span>
+          <button class="chip-btn" id="btn-am" title="查看晨間 routine"><span class="lbl">AM</span><b id="am-count">0/0</b></button>
+          <button class="chip-btn chip-ico" id="btn-set" title="設定" aria-label="設定" aria-haspopup="menu"><svg viewBox="0 0 13 13" aria-hidden="true" shape-rendering="crispEdges"><path fill="currentColor" d="M5 0h3v2h1v1h1V2h2v2h-1v1h2v3h-2v1h1v2h-2v-1H9v1H8v2H5v-2H4v-1H3v1H1V9h1V8H0V5h2V4H1V2h2v1h1V2h1zM5 5v3h3V5z"/></svg></button>
+          <button class="btn btn-mag" id="btn-end"><span class="ico">■</span> 結束今日</button>
+        </div>
+      </header>
+
+      <div class="dash-body">
+      <div class="snav-back" id="snav-back" hidden></div>
+      <nav class="snav" id="snav" aria-label="看板區塊">
+        <div class="snav-h"><span class="snav-t">MENU</span><button class="snav-fold" id="snav-fold" aria-label="收合選單" title="收合／展開選單">&lt;&lt;</button></div>
+        <div class="snav-list" id="snav-list"></div>
+      </nav>
+      <main class="wrap">
+        <div class="stats" id="stats"></div>
+
+        <div class="zone"><span>TODAY</span><em>每天只看這三塊</em></div>
+        <section class="panel">
+          <h2><b>01</b>本週執行看板<small>本週重點最多 3 個 · 點卡片可編輯</small></h2>
+          <div class="focus-grid" id="focus"></div>
+        </section>
+        <div class="cols">
+          <section class="panel col-7">
+            <h2><b>02</b>本週要做<small>排定日期在一週內（含逾期）且未完成</small></h2>
+            <div id="todo"></div>
+          </section>
+          <section class="panel col-5">
+            <h2><b>03</b>等待中<small>卡在別人或資料</small></h2>
+            <div id="waiting"></div>
+          </section>
+        </div>
+
+        <div class="zone"><span>LIFE</span></div>
+        <div class="cols">
+          <section class="panel col-7">
+            <h2><b>04</b>每日任務</h2>
+            <div id="lf-cal"></div>
+          </section>
+          <div class="col-5">
+            <section class="panel">
+              <h2><b>05</b>習慣</h2>
+              <div id="lf-habits"></div>
+            </section>
+            <section class="panel">
+              <h2><b>06</b>專注</h2>
+              <div class="lf-fo" id="lf-fo">
+                <div class="lf-fo-mode"><button data-act="fo-mode" data-m="pomo">番茄鐘</button><button data-act="fo-mode" data-m="up">正計時</button></div>
+                <div class="lf-fo-time" id="fo-time">25:00</div>
+                <button type="button" class="in fo-pick" id="fo-pick" data-act="fo-pick" aria-haspopup="listbox" aria-label="選擇要專注的事"><span id="fo-pick-l">專注在…</span></button>
+                <button class="btn" data-act="fo-go" id="fo-go"></button>
+                <div class="lf-fo-sum" id="fo-sum"></div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <!-- 今日紀錄：先收起來（資料和程式都留著），要恢復就把這段放回一個 panel -->
+        <div hidden>
+<div class="lf-log" id="lf-log">
+              <textarea class="in" data-df="note" rows="2" placeholder="寫點什麼" aria-label="日記"></textarea>
+              <div class="lf-meals">
+                <input class="in" data-df="b" placeholder="早" aria-label="早餐" autocomplete="off">
+                <input class="in" data-df="l" placeholder="中" aria-label="午餐" autocomplete="off">
+                <input class="in" data-df="d" placeholder="晚" aria-label="晚餐" autocomplete="off">
+              </div>
+              <div class="lf-nums">
+                <label class="lf-num"><span>KG</span><input class="in" type="number" step="0.1" min="0" inputmode="decimal" data-df="kg" aria-label="體重（公斤）"></label>
+                <div class="lf-chart" id="lf-kg"></div>
+                <label class="lf-num"><span>SLEEP</span><input class="in" type="number" step="0.5" min="0" max="24" inputmode="decimal" data-df="sleep" aria-label="睡眠（小時）"></label>
+                <div class="lf-chart" id="lf-sleep"></div>
+              </div>
+            </div>
+        </div>
+        <section class="panel">
+          <h2><b>07</b>印記<span class="lf-mk-nav" id="lf-mk-nav"></span></h2>
+          <div id="lf-marks"></div>
+        </section>
+
+        <div class="zone"><span>SYSTEM</span><em>每週復盤時再整理</em></div>
+        <section class="panel">
+          <h2><b>08</b>專案看板<small>拖曳卡片改狀態 · 新想法先丟收件匣</small></h2>
+          <div class="kanban" id="kanban"></div>
+        </section>
+        <div class="cols">
+          <section class="panel col-7">
+            <h2><b>09</b>待確認<small>確認後打勾</small></h2>
+            <div id="confirm"></div>
+          </section>
+          <section class="panel col-5">
+            <h2><b>10</b>期限時間軸<small>DEADLINES</small></h2>
+            <div id="timeline"></div>
+          </section>
+        </div>
+        <div class="cols">
+          <section class="panel col-7">
+            <h2><b>11</b>各領域<small>DOMAINS</small></h2>
+            <div class="dom-grid" id="domains"></div>
+          </section>
+          <section class="panel col-5">
+            <h2><b>12</b>每週復盤<small>約 20 分鐘</small><button class="h-act" data-act="new-r">＋ 新增</button></h2>
+            <div id="reviews"></div>
+          </section>
+        </div>
+
+        <footer class="foot"><span id="foot-info"></span></footer>
+      </main>
+      </div>
+    </section>
+
+    <!-- ░░ 視窗（routine / 專案 / 復盤） ░░ -->
+    <div class="modal" id="modal" hidden>
+      <div class="modal-box" id="modal-box"></div>
+    </div>
+
+    <div class="pop pxb" id="pop" hidden></div>
+    <div class="toast pxb" id="toast" hidden></div>
+    <div class="flash" id="flash"></div>
+  </div>
+
+  <div class="afterglow" id="glow"></div>
+  <div class="fx fx-scan"></div>
+  <div class="fx fx-roll"></div>
+  <div class="fx fx-vig"></div>
+</div>
+
+<script src="seed.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
