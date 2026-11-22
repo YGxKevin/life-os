@@ -219,6 +219,116 @@ class Updater:
 UPDATER = Updater()
 
 
+# ── 圖示：64×64 像素畫，照名稱的第一個字畫（Safari 網頁 App、Edge 視窗、分頁小圖示都用這個）──
+# 上面一行小字 //OS、中間大字母（黃＋洋紅陰影）、下面看板的分格進度條。名稱第一個字不是英文／數字就畫 //。
+# 不用任何影像套件（Windows 版的 Python 沒有），自己寫 PNG。
+_G = """
+A ..###.. .##.##. ##...## ##...## ####### ##...## ##...##
+B ######. ##...## ##...## ######. ##...## ##...## ######.
+C ..####. .##..## ##..... ##..... ##..... .##..## ..####.
+D #####.. ##..##. ##...## ##...## ##...## ##..##. #####..
+E ####### ##..... ##..... ######. ##..... ##..... #######
+F ####### ##..... ##..... ######. ##..... ##..... ##.....
+G ..##### .##.... ##..... ##..### ##...## .##..## ..#####
+H ##...## ##...## ##...## ####### ##...## ##...## ##...##
+I ######. ..##... ..##... ..##... ..##... ..##... ######.
+J ....### .....## .....## .....## ##...## ##...## .#####.
+K ##...## ##..##. ##.##.. ####... ##.##.. ##..##. ##...##
+L ##..... ##..... ##..... ##..... ##..... ##..... #######
+M ##...## ###.### ####### ####### ##.#.## ##...## ##...##
+N ##...## ###..## ####.## ##.#### ##..### ##...## ##...##
+O .#####. ##...## ##...## ##...## ##...## ##...## .#####.
+P ######. ##...## ##...## ######. ##..... ##..... ##.....
+Q .#####. ##...## ##...## ##...## ##.#### ##..##. .###.##
+R ######. ##...## ##...## #####.. ##.###. ##..### ##...##
+S .#####. ##...## ##..... .#####. .....## ##...## .#####.
+T ######. ..##... ..##... ..##... ..##... ..##... ..##...
+U ##...## ##...## ##...## ##...## ##...## ##...## .#####.
+V ##...## ##...## ##...## ###.### .#####. ..###.. ...#...
+W ##...## ##...## ##.#.## ####### ####### ###.### ##...##
+X ##...## ###.### .#####. ..###.. .#####. ###.### ##...##
+Y ##..##. ##..##. ##..##. .####.. ..##... ..##... ..##...
+Z ####### ....### ...###. ..###.. .###... ###.... #######
+0 .#####. ##...## ##..### ##.#.## ###..## ##...## .#####.
+1 ..##... .###... ..##... ..##... ..##... ..##... ######.
+2 .#####. ##...## ....### ..####. .###... ###.... #######
+3 ####### ....##. ...##.. ..####. .....## ##...## .#####.
+4 ...###. ..####. .##.##. ##..##. ####### ....##. ....##.
+5 ######. ##..... ######. .....## .....## ##...## .#####.
+6 ..####. .##.... ##..... ######. ##...## ##...## .#####.
+7 ####### ##...## ....##. ...##.. ..##... ..##... ..##...
+8 .#####. ##...## ##...## .#####. ##...## ##...## .#####.
+9 .#####. ##...## ##...## .###### .....## ....##. .####..
+/ .....## ....##. ...##.. ..##... .##.... ##..... ##.....
+"""
+GLYPHS = {ln[0]: ln[2:].split() for ln in _G.strip().splitlines()}
+ICON_SIZES = {"icon.png": 64, "favicon.ico": 64, "apple-touch-icon.png": 512, "icon-512.png": 512}
+_ICON_CACHE = {}
+
+
+def icon_letter(brand):
+    c = (str(brand or "").strip() or "LIFE")[0].upper()
+    return c if c in GLYPHS and c != "/" else "/"
+
+
+def icon_pixels(letter):
+    """回傳 64×64 的 [[(r,g,b)]]"""
+    n, bg0, bg1, grid = 64, (22, 19, 43), (7, 6, 13), (44, 39, 86)
+    cyan, mag, yel = (0, 240, 255), (255, 42, 109), (252, 238, 10)
+    px = []
+    for y in range(n):
+        t = y / (n - 1)
+        base = tuple(round(bg0[k] * (1 - t) + bg1[k] * t) for k in range(3))
+        line = tuple(round(base[k] * 0.78 + grid[k] * 0.22) for k in range(3))
+        px.append([line if (x % 8 == 4 or y % 8 == 4) else base for x in range(n)])
+
+    def put(x, y, w, h, c):
+        for j in range(max(0, y), min(n, y + h)):
+            for i in range(max(0, x), min(n, x + w)):
+                px[j][i] = c
+
+    def glyph(ch, x, y, s, c, shadow=None, off=1):
+        for col, d in ((shadow, off), (c, 0)):
+            if col:
+                for j, row in enumerate(GLYPHS[ch]):
+                    for i, v in enumerate(row):
+                        if v == "#":
+                            put(x + i * s + d, y + j * s + d, s, s, col)
+
+    for k, ch in enumerate("//OS"):                    # 上面一行小字
+        glyph(ch, 17 + k * 8, 8, 1, cyan)
+    if letter == "/":
+        glyph("/", 9, 21, 3, yel, mag, 2)
+        glyph("/", 31, 21, 3, yel, mag, 2)
+    else:
+        glyph(letter, 17, 19, 4, yel, mag, 2)
+    for i in range(8):                                 # 分格進度條：亮 5 格
+        put(12 + i * 5, 52, 4, 3, yel if i < 5 else grid)
+    return px
+
+
+def png_bytes(px, scale):
+    import struct
+    import zlib
+    raw = bytearray()
+    for row in px:
+        line = b"\x00" + b"".join(bytes(c) * scale for c in row)
+        raw += line * scale
+    w = len(px[0]) * scale
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, w, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+
+def icon_png(letter, size):
+    key = (letter, size)
+    if key not in _ICON_CACHE:
+        _ICON_CACHE[key] = png_bytes(icon_pixels(letter), max(1, size // 64))
+    return _ICON_CACHE[key]
+
+
 CODE_FILES = ("index.html", "app.js", "style.css")
 
 
@@ -276,12 +386,36 @@ class Handler(SimpleHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def _icon(self, rel):
+        """圖示照目前的名稱畫（改名後重新整理就換）；ETag＝字母＋尺寸"""
+        try:
+            letter = icon_letter((read_state() or {}).get("brand"))
+        except ValueError:
+            letter = "/"
+        size = ICON_SIZES[rel]
+        etag = '"ic-%s-%d"' % (ord(letter), size)
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return
+        body = icon_png(letter, size)
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
     def _static(self, path):
         """靜態檔：ETag（沒變回 304）、文字檔 gzip（壓好的留在記憶體）。字型／音效幾乎不會變 → 瀏覽器快取 30 天；
         html／js／css 每次用 ETag 問一下有沒有新版（改了程式重新整理就生效）。"""
         rel = urllib.parse.unquote(path).lstrip("/") or "index.html"
-        if rel == "favicon.ico" and not os.path.isfile(os.path.join(ROOT, rel)):
-            rel = "icon.png"                           # 瀏覽器會自己來要 /favicon.ico
+        if rel in ICON_SIZES:
+            return self._icon(rel)
         p = os.path.realpath(os.path.join(ROOT, rel))
         if not p.startswith(ROOT + os.sep) or not os.path.isfile(p):
             return self._json(404, {"error": "not found"})

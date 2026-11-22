@@ -2667,6 +2667,8 @@
     if (document.title !== full) document.title = full;
     $('meta[name="apple-mobile-web-app-title"]')?.setAttribute('content', full);
     $('#logo-s').textContent = full;
+    const ic = encodeURIComponent(NAME()[0]);                      // 圖示照名稱第一個字畫（server.py），改名就換網址讓瀏覽器重抓
+    for (const [rel, f] of [['icon', 'icon.png'], ['apple-touch-icon', 'apple-touch-icon.png']]) { const l = $(`link[rel="${rel}"]`); if (l && !l.href.endsWith(`${f}?n=${ic}`)) l.href = `${f}?n=${ic}`; }
     if (!b) {
       if ($('#logo-in')) return;
       logo.classList.remove('glitch'); delete logo.dataset.text;
