@@ -1653,6 +1653,7 @@
  ${selBtn('tType', t.type, 'data-tf="type" aria-label="類型"', { sm: true }).replace('class="in sel sm', 'class="in sel sm t-type')}
               ${selBtn('tStatus', t.status, 'data-tf="status" aria-label="狀態"', { sm: true })}
               ${ty === '待確認' ? '' : dateBtn(t.sched, 'data-tf="sched" aria-label="排定日期"', { sm: true })}
+              ${ty !== '里程碑' && t.status !== '完成' && t.status !== '已放棄' && t.sched !== ymd(new Date()) ? `<button class="h-act lf-to" data-act="t-today" data-id="${t.id}" aria-label="排到今天的每日任務：${esc(t.name)}">→今天</button>` : ''}
               <button class="x" data-act="del-task" data-id="${t.id}" aria-label="刪除任務">X</button>
               ${t.status === '等待中' ? `<input class="in sm wait" data-tf="wait" value="${esc(t.wait)}" placeholder="等待對象（誰／什麼資料）">` : ''}
             </div>`).join('') || '<p class="none">拖任務到這裡</p>'}</div>`;
@@ -1701,6 +1702,11 @@
         if (act === 'close') return ctl.close();
         if (act === 'tog-task') { toggleTask(el.dataset.id); render(); }
         else if (act === 'del-task') { deleteTask(el.dataset.id); render(); }
+        else if (act === 't-today') {              // 里程碑以外的任務 → 今天的每日任務（有復原）
+          const t = task(el.dataset.id); if (!t) return;
+          const was = t.sched; t.sched = ymd(new Date()); sfx.check(); commit(); render();
+          toast('已排到今天的每日任務', () => { t.sched = was; commit(); if (modalCtl === ctl) render(); });
+        }
         else if (act === 'tog-focus') { toggleFocus(p.id); render(); box.querySelector('.ckline')?.focus(); }
         else if (act === 'del-cancel') { armed = false; render(); box.querySelector('[data-act="del-p"]').focus(); }
         else if (act === 'del-p') {
@@ -1812,7 +1818,7 @@
   }
 
   /* ══════════ 看板渲染 ══════════ */
-  const ui = { openGrp: null, todoP: '', addCat: null, addPri: 0 };
+  const ui = { openGrp: null, addCat: null, addPri: 0 };
   const tag = (p) => (p ? `<span class="tag ${p.code ? domC(p.domain) : 'c-dim'}">${esc(p.code || 'NEW')}</span>` : '');
   const chip = (text, cls) => `<span class="chip ${cls || ''}">${esc(text)}</span>`;
   const empty = (en, zh) => `<div class="empty">${en}<span>${zh}</span></div>`;
@@ -1832,8 +1838,6 @@
     const open = (t) => t.status !== '完成' && t.status !== '已放棄';
     const focus = projects.filter((p) => p.focus);
     const running = projects.filter((p) => p.status === '執行中');
-    const todo = tasks.filter((t) => t.sched && open(t) && dayDiff(TODAY, t.sched) <= 7).sort((a, b) => a.sched.localeCompare(b.sched));
-    const loose = tasks.filter((t) => !t.p && !t.sched && open(t));
     const waiting = tasks.filter((t) => t.status === '等待中');
     const confirms = tasks.filter((t) => t.type === '待確認' && open(t));
     const dued = projects.filter((p) => p.due && p.status !== '已結案').sort((a, b) => a.due.localeCompare(b.due));
@@ -1871,26 +1875,7 @@
       </article>`;
     }).join('') : empty('NO FOCUS SET', '在下面專案看板的卡片上按「重點」，選出本週最多 3 個重點');
 
-    /* 02 本週要做 */
-    const trow = (t) => {
-      const p = proj(t.p), due = t.sched ? dueInfo(t.sched) : null;
-      return `<div class="row">
-        ${chk(t)}${tag(p)}
-        <span class="grow ${p ? 'link' : ''}" ${p ? `data-act="open-p" data-id="${p.id}" tabindex="0"` : ''}>${esc(t.name)}<span class="sub">${esc(p ? p.name : '未掛專案')} · ${esc(t.type)}${t.status !== '未開始' ? ' · ' + esc(t.status) : ''}</span></span>
-        ${due ? chip(due.text, due.cls) : chip('未排程', 'c-dim')}
-        ${dateBtn(t.sched, `data-chg="t-sched" data-id="${t.id}" aria-label="排定日期"`, { sm: true })}
-        <button class="x" data-act="del-task" data-id="${t.id}" aria-label="刪除任務">X</button>
-      </div>`;
-    };
-    P('#todo').html = ((todo.length || loose.length) ? todo.concat(loose).map(trow).join('') : empty('ALL CLEAR', '一週內沒有排定的任務')) + `
-      <form class="qadd" data-form="add-todo">
-        <input class="in grow" name="name" placeholder="＋ 新增任務，按 Enter" autocomplete="off" aria-label="新任務名稱">
-        ${selBtn('project', ui.todoP, 'aria-label="專案"', { sm: true, name: 'p' })}
-        ${dateBtn(TODAY, 'aria-label="排定日期"', { sm: true, name: 'sched' })}
-        <button class="btn btn-sm">新增</button>
-      </form>`;
-
-    /* 03 等待中 */
+    /* 02 等待中（11/23 拿掉了「本週要做」：跟每日任務重複） */
     P('#waiting').html = waiting.length ? waiting.map((t) => {
       const p = proj(t.p);
       return `<div class="row">${chk(t)}${tag(p)}<span class="grow ${p ? 'link' : ''}" ${p ? `data-act="open-p" data-id="${p.id}" tabindex="0"` : ''}>${esc(t.name)}<span class="sub">等待：${esc(t.wait || '未填')}</span></span></div>`;
@@ -1947,7 +1932,7 @@
       </div>`).join('') : empty('NO REVIEWS', '按右上角「＋ 新增」開始本週復盤');
 
     renderLife();
-    navN = { '02': todo.length + loose.length, '03': waiting.length, '04': tasks.filter((t) => t.sched && t.sched <= ymd(new Date()) && open(t)).length, '05': state.habits.filter((x) => !x.log[dayKey]).length, '08': inbox.length, '09': confirms.length, '10': overdue.length };
+    navN = { '02': waiting.length, '03': tasks.filter((t) => t.sched && t.sched <= ymd(new Date()) && open(t)).length, '04': state.habits.filter((x) => !x.log[dayKey]).length, '07': inbox.length, '08': confirms.length, '09': overdue.length };   // 鍵＝面板編號，改編號要一起改
     renderNav();
     renderMeta();
   }
@@ -2027,8 +2012,6 @@
   });
   dash.addEventListener('change', (e) => {
     const el = e.target;
-    if (el.dataset.chg === 't-sched') { const t = task(el.dataset.id); if (t) { t.sched = el.value; commit(); dash.querySelector(`[data-chg="t-sched"][data-id="${t.id}"]`)?.focus(); } }
-    else if (el.dataset.name === 'p') ui.todoP = el.value;
   });
   dash.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -2038,7 +2021,6 @@
     else if (f.dataset.form === 'add-cal') { const nd = ui.addCat === ND; state.tasks.push(newTask({ name, sched: nd ? '' : ui.calDay, cat: nd ? '' : ui.addCat || '', ...(ui.addPri ? { pri: ui.addPri } : {}) })); }
     else if (f.dataset.form === 'add-cat') { if (state.cats.some((c) => c.name === name)) { sfx.deny(); return toast(`「${name}」已經有了`); } state.cats.push({ id: uid('c'), name }); }
     else if (f.dataset.form === 'add-habit') state.habits.push({ id: uid('h'), name, log: {} });
-    else if (f.dataset.form === 'add-todo') { ui.todoP = fd.get('p'); state.tasks.push(newTask({ name, p: ui.todoP, sched: fd.get('sched') || '' })); }
     else return;
     f.querySelector('[name="name"]').value = '';   // 先清空：重畫會把欄位裡的字帶回去
     sfx.check(); commit();
