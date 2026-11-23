@@ -180,7 +180,9 @@
       const got = Math.max(1, Math.round(base * (1 - d * R.late / 100)));
       return [got, `${note}（逾期 ${d} 天，${money(base)} → ${money(got)}）`];
     };
-    for (const t of state.tasks) if (t.status === '完成') out.push(['t:' + t.id, ...(state.projects.some((p) => p.id === t.p) ? late(R.types[t.type] ?? R.other, t.sched, `${t.type || '任務'}：${t.name || '（未命名）'}`) : late(R.daily, t.sched, `每日任務：${t.name || '（未命名）'}`))]);   // 沒掛專案的算每日任務
+    /* 每日任務照優先級加成：! +10%、!! +20%、!!! +30%（11/23 使用者要求，最多 30%），先加成再算逾期 */
+    const priUp = (t) => { const n = Math.min(3, Math.max(0, +t.pri || 0)); return n ? [Math.round(R.daily * (1 + n / 10)), `（${'!'.repeat(n)} +${n * 10}%）`] : [R.daily, '']; };
+    for (const t of state.tasks) if (t.status === '完成') out.push(['t:' + t.id, ...(state.projects.some((p) => p.id === t.p) ? late(R.types[t.type] ?? R.other, t.sched, `${t.type || '任務'}：${t.name || '（未命名）'}`) : late(priUp(t)[0], t.sched, `每日任務：${t.name || '（未命名）'}${priUp(t)[1]}`))]);   // 沒掛專案的算每日任務
     for (const p of state.projects) if (p.status === '已結案') out.push(['p:' + p.id, ...late(R.project, p.due, `專案結案：${p.name || '（未命名）'}`)]);
     for (const hb of state.habits || []) for (const d in hb.log || {}) out.push([`h:${hb.id}:${d}`, R.habit, `習慣：${hb.name}`]);   // 每個習慣每天一筆
     for (const r of state.reviews || []) if (r.done) out.push(['r:' + r.id, R.review, `每週復盤：${(r.name || '').replace('每週復盤｜', '') || '（未命名）'}`]);
@@ -1070,7 +1072,7 @@
   function openRates(fromWallet) {
     const R = () => state.wallet.rates;
     const fields = () => [
-      { k: 'daily', l: '每日任務', v: R().daily },
+      { k: 'daily', l: '每日任務（優先級每級 +10%）', v: R().daily },
       ...O.tType.map((o) => ({ k: 't:' + o.n, l: `專案「${o.n}」`, v: R().types[o.n] ?? R().other })),
       { k: 'project', l: '專案結案', v: R().project },
       { k: 'wake', l: '開始今日（05:30）', v: R().wake },
