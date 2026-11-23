@@ -2247,21 +2247,22 @@
     const sel = ui.calDay, dues = state.projects.filter((p) => p.due === sel);
     const list = state.tasks.filter((t) => t.sched === sel || (sel === now && t.sched && t.sched < now && live(t)));
     const fold = lfFold();
-    const fmin = {}; for (const f of state.focus) if (f.tid) fmin[f.tid] = (fmin[f.tid] || 0) + f.min;
     const ago = (t) => { const n = dayDiff(t.sched, now); return !t.sched || t.sched >= sel || !live(t) ? '' : `<span class="sub lf-late">${n === 1 ? '昨天' : n === 2 ? '前天' : mmdd(t.sched)}</span>`; };
     const subBtn = (t) => { const n = (t.subs || []).length, shut = fold.has('s:' + t.id); return n ? `<button class="lf-sf" data-act="sub-fold" data-id="${t.id}" aria-expanded="${!shut}" aria-label="${shut ? '展開' : '收起'}子任務：${esc(t.name)}">${shut ? '▸' : '▾'} ${t.subs.filter((q) => q.done).length}/${n}</button>` : ''; };
-    /* 每個類別裡照優先級（3→0）排；同一級裡照 ord（拖曳排的），沒排過的照建立順序放後面 */
+    /* 每個類別裡：沒做完的在前、做完（含放棄）的放最後（11/23 使用者要求）；兩邊各自照優先級（3→0）排；
+       同一級裡照 ord（拖曳排的），沒排過的照建立順序放後面。grp＝拖曳的「同一組」：做完與否＋優先級 */
     const idx = new Map(state.tasks.map((t, i) => [t.id, i]));
-    const sortL = (l) => l.sort((a, b) => (b.pri || 0) - (a.pri || 0) || (a.ord ?? 1e6 + idx.get(a.id)) - (b.ord ?? 1e6 + idx.get(b.id)));
-    let hand = null;   // 這個類別裡可以拖的任務：同一個優先級有 2 個以上
+    const grp = (t) => (live(t) ? '' : 'x') + (t.pri || 0);
+    const sortL = (l) => l.sort((a, b) => !live(a) - !live(b) || (b.pri || 0) - (a.pri || 0) || (a.ord ?? 1e6 + idx.get(a.id)) - (b.ord ?? 1e6 + idx.get(b.id)));
+    let hand = null;   // 這個類別裡可以拖的任務：還沒做完、同一個優先級有 2 個以上
     let toDay = null;  // 無日期區：每列多一顆「→ 選的那天」
-    const row = (t) => `<div class="lf-ti" data-id="${t.id}" data-g="${t.pri || 0}"><div class="lf-t ${t.status === '完成' ? 'done' : ''} ${t.status === '已放棄' ? 'drop' : ''}">${hand ? `<span class="lf-h ${hand.has(t.id) ? '' : 'off'}" ${hand.has(t.id) ? `data-drag="${t.id}"` : ''} aria-hidden="true"></span>` : ''}${chk(t)}${t.pri ? `<i class="lf-pri p${t.pri}">${'!'.repeat(t.pri)}</i>` : ''}
-        <span class="grow link" data-act="open-t" data-id="${t.id}" tabindex="0">${esc(t.name || '（未命名）')}${ago(t)}</span>${subBtn(t)}${fmin[t.id] ? `<span class="lf-min">${fmin[t.id]} 分</span>` : ''}${tag(proj(t.p))}
+    const row = (t) => `<div class="lf-ti" data-id="${t.id}" data-g="${grp(t)}"><div class="lf-t ${t.status === '完成' ? 'done' : ''} ${t.status === '已放棄' ? 'drop' : ''}">${hand ? `<span class="lf-h ${hand.has(t.id) ? '' : 'off'}" ${hand.has(t.id) ? `data-drag="${t.id}"` : ''} aria-hidden="true"></span>` : ''}${chk(t)}${t.pri ? `<i class="lf-pri p${t.pri}">${'!'.repeat(t.pri)}</i>` : ''}
+        <span class="grow link" data-act="open-t" data-id="${t.id}" tabindex="0">${esc(t.name || '（未命名）')}${ago(t)}</span>${subBtn(t)}${tag(proj(t.p))}
         ${toDay && live(t) ? `<button class="h-act lf-to" data-act="t-to" data-id="${t.id}" aria-label="排到${toDay.l}：${esc(t.name)}">→${toDay.s}</button>` : ''}${live(t) ? `<button class="lf-go ${foRun && foRun.tid === t.id ? 'on' : ''}" data-act="t-fo" data-id="${t.id}" aria-label="${foRun && foRun.tid === t.id ? '結束專注' : '開始專注'}：${esc(t.name)}">${foRun && foRun.tid === t.id ? '■' : '▶'}</button>` : ''}</div>${(fold.has('s:' + t.id) ? [] : t.subs || []).map((s) => `
         <div class="lf-t sub ${hand ? 'hh' : ''} ${s.done ? 'done' : ''}"><button class="chk ${s.done ? 'on' : ''}" data-act="sub-tog" data-id="${t.id}" data-sid="${s.id}" aria-pressed="${!!s.done}" aria-label="${esc(s.name)}"></button><span class="grow">${esc(s.name)}</span></div>`).join('')}</div>`;
     const rows = (l, nd) => {
       sortL(l);
-      const by = {}; for (const t of l) (by[t.pri || 0] ||= []).push(t.id);
+      const by = {}; for (const t of l) if (live(t)) (by[grp(t)] ||= []).push(t.id);
       const ids = Object.values(by).filter((a) => a.length > 1).flat();
       hand = ids.length ? new Set(ids) : null;
       toDay = nd ? { s: sel === now ? '今天' : mmdd(sel), l: lfLabel(sel) } : null;
@@ -2314,7 +2315,7 @@
   }
   document.addEventListener('pointerdown', (e) => {
     if (e.button > 0) return;
-    /* 任務：同一個類別、同一個優先級裡換位置；放開後把那一組的順序寫進 ord */
+    /* 任務：同一個類別、還沒做完、同一個優先級裡換位置；放開後把那一組的順序寫進 ord */
     let h = e.target.closest('#lf-cal [data-drag]');
     if (h) {
       const item = h.closest('.lf-ti'), g = item.dataset.g;

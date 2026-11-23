@@ -805,7 +805,6 @@ details.grp ul { padding-left: 22px; }
 .lf-go { flex: none; width: 28px; height: 26px; display: grid; place-items: center; font-size: 11px; color: var(--yel); border: 2px solid var(--line); }
 .lf-go:hover, .lf-go:focus-visible { border-color: var(--yel); outline: 0; }
 .lf-go.on { background: var(--yel); color: #0a0a0a; border-color: var(--yel); animation: blink 1.4s steps(2) infinite; }
-.lf-min { flex: none; font-size: 13px; color: var(--yel); }
 
 /* ───────── 手機閱讀：字不截、不擠、按得到 ───────── */
 textarea.in.auto { resize: none; overflow: hidden; display: block; }
