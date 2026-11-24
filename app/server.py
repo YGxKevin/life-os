@@ -488,7 +488,7 @@ Z ####### ....### ...###. ..###.. .###... ###.... #######
 / .....## ....##. ...##.. ..##... .##.... ##..... ##.....
 """
 GLYPHS = {ln[0]: ln[2:].split() for ln in _G.strip().splitlines()}
-ICON_SIZES = {"icon.png": 64, "favicon.ico": 64, "apple-touch-icon.png": 512, "icon-512.png": 512}
+ICON_SIZES = {"icon.png": 64, "favicon.ico": 64, "apple-touch-icon.png": 512, "icon-512.png": 512, "app.ico": 256}   # app.ico：Windows 工作列／捷徑用（boot.py 抓）
 _ICON_CACHE = {}
 
 
@@ -533,18 +533,18 @@ def icon_pixels(letter):
     return px
 
 
-def png_bytes(px, scale):
+def png_bytes(px, scale, alpha=False):
     import struct
     import zlib
     raw = bytearray()
     for row in px:
-        line = b"\x00" + b"".join(bytes(c) * scale for c in row)
+        line = b"\x00" + b"".join((bytes(c) + b"\xff" if alpha else bytes(c)) * scale for c in row)
         raw += line * scale
     w = len(px[0]) * scale
 
     def chunk(t, d):
         return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, w, 8, 2, 0, 0, 0))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, w, 8, 6 if alpha else 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
@@ -552,6 +552,21 @@ def icon_png(letter, size):
     key = (letter, size)
     if key not in _ICON_CACHE:
         _ICON_CACHE[key] = png_bytes(icon_pixels(letter), max(1, size // 64))
+    return _ICON_CACHE[key]
+
+
+def icon_ico(letter):
+    """Windows 的 .ico：256／128／64 三種大小（PNG 格式、RGBA），小的讓 Windows 自己縮"""
+    import struct
+    key = (letter, "ico")
+    if key not in _ICON_CACHE:
+        px = icon_pixels(letter)
+        imgs = [(n, png_bytes(px, n // 64, alpha=True)) for n in (256, 128, 64)]
+        out, off = struct.pack("<HHH", 0, 1, len(imgs)), 6 + 16 * len(imgs)
+        for n, d in imgs:
+            out += struct.pack("<BBBBHHII", n % 256, n % 256, 0, 0, 1, 32, len(d), off)
+            off += len(d)
+        _ICON_CACHE[key] = out + b"".join(d for _, d in imgs)
     return _ICON_CACHE[key]
 
 
@@ -664,9 +679,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             return
-        body = icon_png(letter, size)
+        ico = rel == "app.ico"
+        body = icon_ico(letter) if ico else icon_png(letter, size)
         self.send_response(200)
-        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Type", "image/x-icon" if ico else "image/png")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("ETag", etag)
         self.send_header("Cache-Control", "no-cache")
