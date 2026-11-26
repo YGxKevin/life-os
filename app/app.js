@@ -130,6 +130,7 @@
     state.sfx ||= { voice: 'bass', vol: 3, pitch: true };
     state.sfx.miss ||= 'thump';
     if (typeof state.sfx.cash !== 'string') state.sfx.cash = '';   // 購買的聲音：''＝收銀機（預設）、'none'＝無聲、'file:檔名'＝sounds/ 裡的音檔
+    if (!state.sfx.ed || typeof state.sfx.ed !== 'object') state.sfx.ed = {};   // 音檔的剪輯：{ 檔名: { a: 開始秒, b: 結束秒, g: 音量 dB } }（不改檔案本身）
     O = state.opts;
     /* 錢包：第一次啟用時，已經完成的東西記在 base 裡，不補發獎勵 */
     if (!state.wallet) { state.wallet = { rates: JSON.parse(JSON.stringify(RATE0)), base: [], log: [], habitV: 1, pmV: 1 }; state.wallet.base = rewardables().map((w) => w[0]); }
@@ -266,7 +267,7 @@
     const got = settle();
     if (got.gain || got.loss) {
       if (got.gain) coinFx(got.gain); else updateCoin(true);
-      if (got.gain) { [988, 1319].forEach((f, i) => beep(f, i ? 0.22 : 0.07, 0.04, i * 0.07)); toast(`＋${money(got.gain)}　${got.n > 1 ? got.n + ' 個項目完成' : got.note}`, null, 3200); }
+      if (got.gain) { if (!evOwn('earn')) [988, 1319].forEach((f, i) => beep(f, i ? 0.22 : 0.07, 0.04, i * 0.07)); toast(`＋${money(got.gain)}　${got.n > 1 ? got.n + ' 個項目完成' : got.note}`, null, 3200); }
       else toast(`已收回 ${money(got.loss)}（取消完成）`, null, 2600);
     }
     try { localStorage.setItem('kos.state', JSON.stringify(state)); } catch (e) { /* ignore */ }
@@ -530,24 +531,43 @@
   }
   /*voice-end*/
 
-  /* 音效庫：sounds/ 資料夾裡的音檔（由 server.py 列出）會自動變成可選的音色 */
-  const sampleData = {}, sampleBuf = {}, samplePending = {};
-  if (online) {
-    fetch('/api/sounds').then((r) => (r.ok ? r.json() : [])).then((list) => {
-      for (const file of list) {
-        const key = 'file:' + file;
-        VOICES[key] = { name: file.replace(/\.[^.]+$/, ''), file: 'sounds/' + encodeURIComponent(file) };
-        fetch(VOICES[key].file).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => { if (b) sampleData[key] = b; }).catch(() => {});
+  /* 音效庫：sounds/ 資料夾裡的音檔（由 server.py 列出）會自動變成可選的音色。
+     音效庫視窗（openSoundLib）可以上傳、改名、剪頭尾、調音量、刪除；剪輯存在 state.sfx.ed，不改檔案本身 */
+  const sampleData = {}, sampleBuf = {}, samplePending = {}, sampleLoad = {};
+  let soundList = [], soundsAt = 0;
+  function dropSample(key) { delete sampleData[key]; delete sampleBuf[key]; delete samplePending[key]; delete sampleLoad[key]; }
+  function loadSounds() {
+    if (!online) return Promise.resolve();
+    soundsAt = Date.now();
+    return fetch('/api/sounds', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : [])).then((list) => {
+      list = list.map((x) => (typeof x === 'string' ? { n: x, v: '' } : x));
+      const keep = new Set(list.map((x) => 'file:' + x.n));
+      for (const k of Object.keys(VOICES)) if (VOICES[k].file && !keep.has(k)) { delete VOICES[k]; dropSample(k); }
+      for (const { n, v } of list) {
+        const key = 'file:' + n, url = 'sounds/' + encodeURIComponent(n) + (v ? '?v=' + v : '');
+        if (VOICES[key]?.file === url) continue;
+        dropSample(key);
+        VOICES[key] = { name: n.replace(/\.[^.]+$/, ''), file: url };
+        sampleLoad[key] = fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => { if (b && VOICES[key]?.file === url) sampleData[key] = b; return b; }).catch(() => null);
       }
+      soundList = list;
     }).catch(() => {});
   }
+  loadSounds();
+  /* 狀態裡選了音檔、這台卻還沒有（別台剛上傳或改名）→ 重新抓清單（最多 10 秒一次） */
+  const knowSound = (key) => !!VOICES[key] || (key?.startsWith('file:') && Date.now() - soundsAt > 10000 && loadSounds(), false);
+  const dB = (g) => Math.pow(10, (+g || 0) / 20);
   function playSample(ctx, key, base, level, boost = 1) {
     const go = (buf) => {
-      const n = ctx.createBufferSource(), g = ctx.createGain();
+      const ed = state.sfx.ed[key.slice(5)] || {};
+      const a = Math.min(Math.max(0, +ed.a || 0), buf.duration), b = ed.b > a ? Math.min(+ed.b, buf.duration) : buf.duration;
+      const n = ctx.createBufferSource(), g = ctx.createGain(), t = ctx.currentTime;
       n.buffer = buf;
       n.playbackRate.value = state.sfx.pitch && boost === 1 ? Math.sqrt(base / 220) : 1;   // 音高跟位置時只小幅變調，保留原本的音色（購買聲不變調）
-      g.gain.value = buf.kosNorm * level * boost;
-      n.connect(g); g.connect(ctx.destination); n.start();
+      const v = buf.kosNorm * level * boost * dB(ed.g), len = (b - a) / n.playbackRate.value;
+      g.gain.setValueAtTime(v, t);
+      if (b < buf.duration - 0.005) { g.gain.setValueAtTime(v, t + Math.max(0, len - 0.012)); g.gain.linearRampToValueAtTime(0, t + len); }   // 剪掉尾巴的地方淡出，不會「啪」一聲
+      n.connect(g); g.connect(ctx.destination); n.start(t, a, b - a);
     };
     if (sampleBuf[key] && sampleBuf[key].kosCtx === ctx) return go(sampleBuf[key]);   // 音檔解碼結果跟著引擎走：換新引擎就重新解碼
     if (sampleBuf[key]) { delete sampleBuf[key]; delete samplePending[key]; }
@@ -564,7 +584,7 @@
   function keySound(x = lastX, kind = 'voice') {
     if (state.muted) return;
     const v = VOICES[state.sfx[kind]];
-    if (!v) return;                                   // 這種情況選了「無聲」
+    if (!v) { knowSound(state.sfx[kind]); return; }   // 這種情況選了「無聲」（或音檔還沒載到）
     const now = performance.now(); if (now - lastKey < 30) return; lastKey = now;
     audio((actx) => {
       const c = state.sfx;
@@ -575,21 +595,37 @@
   }
   const HIT = 'button, a, input, textarea, select, summary, label, [data-act], [tabindex], [draggable="true"]';
   const isHit = (e) => !!e.target.closest?.(HIT);               // 有沒有按到可操作的東西
-  const noVoice = (e) => e.target.closest?.('[data-novoice]');   // 音效設定裡的按鈕：改完設定後再用新音色試聽
+  /* 音效設定裡的按鈕：改完設定後再用新音色試聽。打勾的格子：「完成」選了音檔就只響那一聲，不再疊按鍵聲 */
+  const noVoice = (e) => e.target.closest?.('[data-novoice]') || (e.target.closest?.('.chk, .lf-hb-c, .rt-item') && ownFile('done'));
   document.addEventListener('pointerdown', (e) => { lastX = Math.min(0.999, Math.max(0, e.clientX / window.innerWidth)); if (!noVoice(e)) keySound(lastX, isHit(e) ? 'voice' : 'miss'); }, true);
   document.addEventListener('click', (e) => { if (e.detail === 0 && !noVoice(e)) keySound(); }, true);   // 鍵盤 Enter／空白鍵觸發的點擊
   const softKey = () => { if (performance.now() - lastKey > 400) keySound(); };            // 非點擊觸發的動作（例如 Enter 送出）才補一聲
 
+  /* 情況：每一種都可以選音檔或無聲（state.sfx[鍵]）。''＝內建（下面 sfx 原本的合成聲；按到東西／沒按到是音色，購買是收銀機） */
+  const EVENTS = [['voice', '按到東西'], ['miss', '沒按到'], ['done', '完成'], ['undo', '取消完成'], ['cash', '購買'], ['earn', '入帳'], ['ready', '達成'], ['deny', '錯誤'], ['on', '開機'], ['off', '關機']];
+  const ownFile = (k) => { const v = state.sfx[k]; return !!(v && v.startsWith('file:') && VOICES[v]); };
+  /* 這個情況有自己選的聲音（音檔或無聲）就處理掉、回傳 true；回傳 false＝讓呼叫的人播內建的聲音 */
+  function evOwn(k) {
+    const v = state.sfx[k] || '';
+    if (!v) return false;
+    if (v === 'none') return true;
+    if (!knowSound(v)) return false;               // 音檔被刪了（或還沒載到）→ 先用內建的
+    const lv = VOL[state.sfx.vol] ?? 1;
+    if (!state.muted && lv) audio((ctx) => playSample(ctx, v, 220, lv, 2.8));
+    return true;
+  }
   const sfx = {
     tick: () => beep(1400, 0.02, 0.012),
     check: softKey,
     uncheck: softKey,
+    done: () => { if (!evOwn('done')) softKey(); },          // 打勾完成（任務、子任務、習慣、晨晚間項目）
+    undone: () => { if (!evOwn('undo')) softKey(); },
     post: () => beep(1046, 0.16, 0.04),
-    ready: () => [523, 659, 784, 1046].forEach((f, i) => beep(f, 0.1, 0.035, i * 0.09)),
-    down: () => [784, 659, 523, 392, 262].forEach((f, i) => beep(f, 0.12, 0.035, i * 0.1)),
+    ready: () => { if (!evOwn('ready')) [523, 659, 784, 1046].forEach((f, i) => beep(f, 0.1, 0.035, i * 0.09)); },
+    down: () => { if (!evOwn('off')) [784, 659, 523, 392, 262].forEach((f, i) => beep(f, 0.12, 0.035, i * 0.1)); },
     hum: () => beep(55, 0.9, 0.05, 0, 'sawtooth'),
     click: () => beep(120, 0.05, 0.06),
-    deny: () => { beep(180, 0.09, 0.05); beep(140, 0.12, 0.05, 0.09); }
+    deny: () => { if (!evOwn('deny')) { beep(180, 0.09, 0.05); beep(140, 0.12, 0.05, 0.09); } }
   };
 
   /* ══════════ 畫面切換、開關機特效 ══════════ */
@@ -607,12 +643,13 @@
   }
   async function powerOn(view) {
     screen.classList.add('is-dark');
-    sfx.click();
+    const own = evOwn('on');                       // 開機選了自己的聲音：就不放內建的喀＋嗡
+    if (!own) sfx.click();
     await sleep(380);
     show(view);
     screen.classList.remove('is-dark');
     screen.classList.add('pwr-on');
-    sfx.hum();
+    if (!own) sfx.hum();
     await animEnd(screen, 'pwrOn', 1100);
     screen.classList.remove('pwr-on');
   }
@@ -880,7 +917,6 @@
   }
   function openSound(anchor) {
     const seg = (key, list, cur) => `<div class="seg">${list.map(([v, l]) => `<button type="button" data-novoice data-set="${key}" data-v="${v}" class="${String(cur) === String(v) ? 'on' : ''}" aria-pressed="${String(cur) === String(v)}">${l}</button>`).join('')}</div>`;
-    let target = 'voice';                 // 目前在設定哪一種情況的音色
     const render = () => {
       const c = state.sfx;
       pop.className = 'pop pxb snd';
@@ -889,26 +925,181 @@
         <div class="snd-r"><span>音效</span>${seg('muted', [[0, '開'], [1, '關']], +state.muted)}</div>
         <div class="snd-r"><span>音量</span>${seg('vol', [1, 2, 3, 4, 5].map((n) => [n, n]), c.vol)}</div>
         <div class="snd-r"><span>音高</span>${seg('pitch', [[1, '跟位置'], [0, '固定']], +c.pitch)}</div>
-        <div class="snd-l">音色（點了會試聽）${seg('target', [['voice', '按到東西'], ['miss', '沒按到'], ['cash', '購買']], target)}</div>
-        <div class="pop-list">${(target === 'cash'
-          ? [['', '收銀機', 'c-cyan'], ...Object.entries(VOICES).filter(([, v]) => v.file).map(([k, v]) => [k, v.name, 'c-yel']), ['none', '（無聲）', '']]
-          : [...Object.entries(VOICES).map(([k, v]) => [k, v.name, v.file ? 'c-yel' : 'c-cyan']), ['none', '（無聲）', '']]).map(([k, n, col]) => `<div class="pop-row"><button type="button" data-novoice class="pop-opt ${c[target] === k ? 'on' : ''}" data-set="tone" data-v="${esc(k)}" aria-pressed="${c[target] === k}"><i class="sw ${col}"></i><span>${esc(n)}</span></button></div>`).join('')}</div>`;
+        <div class="pop-row snd-lib"><button type="button" class="pop-opt set-opt" data-set="lib"><span>音效庫</span><i class="set-arrow">▸</i></button></div>`;
     };
     openPop(anchor, render);
     pop.onclick = (e) => {
       const b = e.target.closest('[data-set]'); if (!b) return;
       const k = b.dataset.set, v = b.dataset.v;
+      if (k === 'lib') { closePop(); return openSoundLib(); }
       if (k === 'muted') state.muted = v === '1';
       else if (k === 'vol') state.sfx.vol = +v;
       else if (k === 'pitch') state.sfx.pitch = v === '1';
-      else if (k === 'target') target = v;
-      else state.sfx[target] = v;
       save(); updateHud(); render(); placePop(anchor);
       [...pop.querySelectorAll(`[data-set="${k}"]`)].find((x) => x.dataset.v === v)?.focus();
-      if (target === 'cash' && (k === 'target' || k === 'tone')) { primeCash(); kaching(); }
-      else { lastKey = 0; keySound(lastX, k === 'target' || k === 'tone' ? target : 'voice'); }
+      lastKey = 0; keySound(lastX, 'voice');
     };
-    pop.querySelector('.pop-opt.on')?.focus();
+    pop.querySelector('.seg button.on')?.focus();
+  }
+  /* 音效庫（11/26）：上面「情況」選每種情況用哪個聲音（▶ 試聽）；下面是 sounds/ 裡的音檔：▶ 試聽、點名字展開編輯
+     （改名、拖波形兩端剪頭尾、音量 ±3 dB、重設）、X 刪除（可復原）、＋ 加入（上傳到伺服器，每台裝置都看得到）。
+     剪頭尾和音量存在 state.sfx.ed，不改檔案本身 */
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const SFX_DEF = { voice: 'bass', miss: 'thump' };          // 音檔被刪掉時回到這個（其他情況回到 ''＝內建）
+  function openSoundLib() {
+    let sel = null;
+    const bufs = {};                                         // 檔名 → AudioBuffer（畫波形、算長度）
+    const stem = (n) => n.replace(/\.[^.]+$/, '');
+    const fkey = (n) => 'file:' + n;
+    async function bufOf(n) {
+      if (bufs[n]) return bufs[n];
+      const key = fkey(n), data = sampleData[key] || (await sampleLoad[key]);
+      if (!data || !OAC) return null;
+      const b = await new OAC(1, 1, 44100).decodeAudioData(data.slice(0)).catch(() => null);
+      if (!b) return null;
+      const d = b.getChannelData(0), N = 600, step = Math.max(1, Math.floor(d.length / N)), pk = new Float32Array(N);
+      for (let i = 0; i < N; i++) { let m = 0; for (let j = i * step, e = Math.min(d.length, j + step); j < e; j++) { const v = Math.abs(d[j]); if (v > m) m = v; } pk[i] = m; }
+      let top = 0; for (const v of pk) top = Math.max(top, v); b.kosPk = pk.map((v) => v / (top || 1));
+      return (bufs[n] = b);
+    }
+    const span = (n, b) => { const e = state.sfx.ed[n] || {}, a = Math.min(+e.a || 0, b.duration); return [a, e.b > a ? Math.min(+e.b, b.duration) : b.duration]; };
+    const opts = (k) => [
+      ...(k === 'voice' || k === 'miss' ? Object.entries(VOICES).filter(([, v]) => !v.file).map(([id, v]) => [id, v.name]) : [['', k === 'cash' ? '收銀機' : '內建']]),
+      ...soundList.map((x) => [fkey(x.n), stem(x.n)]), ['none', '無聲']];
+    const render = () => {
+      const c = state.sfx;
+      const cur = (k) => { const v = c[k] || ''; return v.startsWith('file:') && !VOICES[v] ? (k in SFX_DEF ? SFX_DEF[k] : '') : v; };
+      box.innerHTML = `<div data-novoice>
+        <div class="rt-head">SOUNDS</div>
+        <div class="sl-h">情況</div>
+        <div class="sl-evs">${EVENTS.map(([k, l]) => `<div class="sl-ev"><span>${l}</span><select class="in sm" data-ev="${k}" aria-label="${l}的聲音">${opts(k).map(([v, t]) => `<option value="${esc(v)}" ${cur(k) === v ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select><button class="h-act" data-act="ev-play" data-k="${k}" aria-label="試聽${l}">▶</button></div>`).join('')}</div>
+        <div class="sl-h"><span>音檔</span><label class="h-act sl-up">＋ 加入<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" multiple hidden data-act="up"></label></div>
+        <div class="sl-fs">${soundList.map(({ n }) => {
+          const on = sel === n, uses = EVENTS.filter(([k]) => c[k] === fkey(n)).map(([, l]) => l), e = c.ed[n] || {};
+          return `<div class="sl-f ${on ? 'on' : ''}" data-n="${esc(n)}"><button class="h-act" data-act="f-play" aria-label="試聽 ${esc(stem(n))}">▶</button><button class="sl-n" data-act="f-sel" aria-expanded="${on}">${esc(stem(n))}</button>${uses.map((l) => `<i class="sl-use">${l}</i>`).join('')}<span class="sl-d"></span><button class="x" data-act="f-del" aria-label="刪除 ${esc(stem(n))}">X</button></div>
+          ${on ? `<div class="sl-ed" data-n="${esc(n)}"><form data-form="ren"><input class="in" name="nm" value="${esc(stem(n))}" maxlength="60" autocomplete="off" aria-label="名稱"></form>
+            <canvas class="sl-wave" aria-label="拖兩端剪頭尾"></canvas>
+            <div class="sl-tools"><span class="sl-t"></span><span class="sp"></span><button class="h-act" data-act="g-" aria-label="小聲一點">−</button><span class="sl-g">${(+e.g || 0) > 0 ? '+' : ''}${+e.g || 0} dB</span><button class="h-act" data-act="g+" aria-label="大聲一點">＋</button>${state.sfx.ed[n] ? '<button class="h-act" data-act="ed-reset">重設</button>' : ''}</div></div>` : ''}`;
+        }).join('') || '<div class="sl-empty">—</div>'}</div>
+        <div class="rt-foot"><span class="sp"></span><button class="btn" data-act="close">關閉</button></div></div>`;
+      for (const { n } of soundList) bufOf(n).then((b) => { const el = [...box.querySelectorAll('.sl-f')].find((x) => x.dataset.n === n); if (b && el) { const [a, z] = span(n, b); el.querySelector('.sl-d').textContent = (z - a).toFixed(2) + 's'; } });
+      if (sel) bufOf(sel).then(() => drawWave());
+      const cv = box.querySelector('.sl-wave'); if (cv) cv.onpointerdown = trimDrag;
+    };
+    function drawWave() {
+      const cv = box.querySelector('.sl-wave'), b = sel && bufs[sel]; if (!cv || !b) return;
+      const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+      const [a, z] = span(sel, b), pk = b.kosPk, xa = (a / b.duration) * W, xz = (z / b.duration) * W;
+      for (let x = 0; x < W; x += 2) {
+        const v = pk[Math.min(pk.length - 1, Math.floor((x / W) * pk.length))], h = Math.max(1, v * (H - 8));
+        g.fillStyle = x >= xa && x <= xz ? '#00f0ff' : '#3d3966'; g.fillRect(x, (H - h) / 2, 2, h);
+      }
+      g.fillStyle = '#fcee0a';
+      for (const x of [xa, xz]) { const p = Math.min(W - 3, Math.max(0, x - 1.5)); g.fillRect(p, 0, 3, H); g.fillRect(Math.min(W - 9, Math.max(0, x - 4.5)), 0, 9, 6); g.fillRect(Math.min(W - 9, Math.max(0, x - 4.5)), H - 6, 9, 6); }
+      const t = box.querySelector('.sl-t'); if (t) t.textContent = `${a.toFixed(2)} – ${z.toFixed(2)} s`;
+    }
+    function setEd(n, o) {
+      const e = { ...(state.sfx.ed[n] || {}), ...o }, b = bufs[n];
+      if (!(e.a > 0.001)) delete e.a;
+      if (!b || !(e.b < b.duration - 0.001)) delete e.b;
+      if (!e.g) delete e.g;
+      if (Object.keys(e).length) state.sfx.ed[n] = e; else delete state.sfx.ed[n];
+    }
+    function trimDrag(ev) {
+      const cv = ev.currentTarget, b = bufs[sel]; if (!b) return;
+      ev.preventDefault();
+      try { cv.setPointerCapture(ev.pointerId); } catch (er) { /* */ }
+      const r = cv.getBoundingClientRect(), at = (x) => Math.min(1, Math.max(0, (x - r.left) / r.width)) * b.duration;
+      const [a0, z0] = span(sel, b), t0 = at(ev.clientX), end = Math.abs(t0 - a0) <= Math.abs(t0 - z0) ? 'a' : 'b';
+      const move = (e) => {
+        const [a, z] = span(sel, b), t = at(e.clientX);
+        setEd(sel, end === 'a' ? { a: +Math.min(t, z - 0.02).toFixed(3), b: z } : { a, b: +Math.max(t, a + 0.02).toFixed(3) });
+        drawWave();
+      };
+      move(ev);
+      const up = () => { cv.removeEventListener('pointermove', move); cv.removeEventListener('pointerup', up); cv.removeEventListener('pointercancel', up); save(); playFile(sel); render(); };
+      cv.addEventListener('pointermove', move); cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+    }
+    const playFile = (n) => { const lv = VOL[state.sfx.vol] || 1; audio((ctx) => playSample(ctx, fkey(n), 220, lv, 2.8)); };   // 試聽：靜音時也響
+    const evPlay = (k) => {
+      lastKey = 0;
+      if (k === 'voice' || k === 'miss') return keySound(lastX, k);
+      if (k === 'cash') { primeCash(); return kaching(); }
+      if (k === 'on') { if (!evOwn('on')) { sfx.click(); setTimeout(sfx.hum, 380); } return; }
+      if (k === 'earn') { if (!evOwn('earn')) [988, 1319].forEach((f, i) => beep(f, i ? 0.22 : 0.07, 0.04, i * 0.07)); return; }
+      ({ done: sfx.done, undo: sfx.undone, ready: sfx.ready, deny: sfx.deny, off: sfx.down })[k]?.();
+    };
+    const post = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then((r) => r.json().catch(() => ({})).then((j) => (r.ok ? j : Promise.reject(new Error(j.error || '伺服器沒回應')))));
+    const fail = (e) => { sfx.deny(); toast(e.message || '連不上伺服器'); };
+    /* 改名、刪除時，把用到這個音檔的情況和剪輯一起帶過去 */
+    function moveRefs(from, to) {
+      for (const [k] of EVENTS) if (state.sfx[k] === fkey(from)) state.sfx[k] = to ? fkey(to) : (SFX_DEF[k] || '');
+      if (state.sfx.ed[from]) { if (to) state.sfx.ed[to] = state.sfx.ed[from]; delete state.sfx.ed[from]; }
+    }
+    async function rename(n, to) {
+      to = to.trim(); if (!to || to === stem(n)) return render();
+      try {
+        const j = await post('/api/sounds/rename', { from: n, to });
+        moveRefs(n, j.name); bufs[j.name] = bufs[n]; delete bufs[n]; if (sel === n) sel = j.name;
+        save(); await loadSounds(); if (modalCtl === ctl) render();
+      } catch (e) { fail(e); render(); }
+    }
+    async function del(n) {
+      const keep = { ev: EVENTS.map(([k]) => k).filter((k) => state.sfx[k] === fkey(n)), ed: state.sfx.ed[n] };
+      try {
+        await post('/api/sounds/delete', { name: n });
+        moveRefs(n, null); if (sel === n) sel = null; save(); await loadSounds(); if (modalCtl === ctl) render();
+        toast(`已刪除「${stem(n)}」`, async () => {
+          try {
+            await post('/api/sounds/restore', { name: n });
+            for (const k of keep.ev) state.sfx[k] = fkey(n);
+            if (keep.ed) state.sfx.ed[n] = keep.ed;
+            save(); await loadSounds(); if (modalCtl === ctl) render();
+          } catch (e) { fail(e); }
+        });
+      } catch (e) { fail(e); }
+    }
+    async function upload(list) {
+      const ok = [];
+      for (const f of list) {
+        if (!/\.(mp3|wav|ogg|m4a)$/i.test(f.name)) { toast(`「${f.name}」不是 mp3、wav、ogg、m4a`); continue; }
+        if (f.size > 8 * 1024 * 1024) { toast(`「${f.name}」超過 8 MB`); continue; }
+        try { ok.push((await fetch('/api/sounds?name=' + encodeURIComponent(f.name), { method: 'POST', body: f }).then((r) => r.json().then((j) => (r.ok ? j : Promise.reject(new Error(j.error)))))).name); }
+        catch (e) { fail(e); }
+      }
+      if (!ok.length) return;
+      await loadSounds(); sel = ok[ok.length - 1]; sfx.check();
+      if (modalCtl === ctl) { render(); box.querySelector('.sl-f.on')?.scrollIntoView({ block: 'nearest' }); }
+      if (ok.length > 1) toast(`已加入 ${ok.length} 個音檔`);
+    }
+    const ctl = openModal('sl', {
+      dismiss: () => true, render,
+      click(e) {
+        const el = e.target.closest('[data-act]'); if (!el) return;
+        const act = el.dataset.act, n = el.closest('[data-n]')?.dataset.n;
+        if (act === 'close') return ctl.close();
+        if (act === 'ev-play') return evPlay(el.dataset.k);
+        if (act === 'f-play') return playFile(n);
+        if (act === 'f-sel') { sel = sel === n ? null : n; render(); return box.querySelector(`.sl-f.on .sl-n`)?.focus(); }
+        if (act === 'f-del') return del(n);
+        if (act === 'g-' || act === 'g+') {
+          const g = Math.min(12, Math.max(-24, (+(state.sfx.ed[n] || {}).g || 0) + (act === 'g+' ? 3 : -3)));
+          setEd(n, { g }); save(); render(); playFile(n); return box.querySelector(`[data-act="${act}"]`)?.focus();
+        }
+        if (act === 'ed-reset') { delete state.sfx.ed[n]; save(); render(); playFile(n); }
+      },
+      change(e) {
+        const s = e.target;
+        if (s.dataset.ev) { state.sfx[s.dataset.ev] = s.value; save(); evPlay(s.dataset.ev); render(); return box.querySelector(`[data-ev="${s.dataset.ev}"]`)?.focus(); }
+        if (s.dataset.act === 'up') { const l = [...s.files]; s.value = ''; return upload(l); }
+        if (s.name === 'nm') return rename(s.closest('[data-n]').dataset.n, s.value);
+      },
+      submit(e) { e.preventDefault(); const i = e.target.querySelector('[name="nm"]'); if (i) i.blur(); }
+    });
+    loadSounds().then(() => { if (modalCtl === ctl) render(); });
   }
   /* 齒輪：所有設定的入口。之後有新的設定畫面，在 SETTINGS 加一列就好 */
   const SETTINGS = [
@@ -1171,7 +1362,7 @@
   function kaching() {
     if (state.muted || state.sfx.cash === 'none') return;
     const lv = VOL[state.sfx.vol] ?? 1; if (!lv) return;
-    const own = VOICES[state.sfx.cash];             // 自己選的音檔（sounds/）；檔案不見了就回到收銀機
+    const own = knowSound(state.sfx.cash) && VOICES[state.sfx.cash];   // 自己選的音檔（sounds/）；檔案不見了就回到收銀機
     if (own?.file) return audio((ctx) => playSample(ctx, state.sfx.cash, 220, lv, 2.8));
     audio((ctx) => {
       if (!cashData) { loadCash(); return cashSound(ctx, lv); }
@@ -1554,7 +1745,7 @@
           if (it) {
             const items = routine(kind), t = items[+it.dataset.i];
             day[kind][t] = !day[kind][t]; save();
-            day[kind][t] ? (items.every((x) => day[kind][x]) ? sfx.ready() : sfx.check()) : sfx.uncheck();
+            day[kind][t] ? (items.every((x) => day[kind][x]) ? sfx.ready() : sfx.done()) : sfx.undone();
             render(); updateHud();
             box.querySelector(`.rt-item[data-i="${it.dataset.i}"]`)?.focus();
             return;
@@ -1580,7 +1771,7 @@
   function toggleTask(id) {
     const t = task(id); if (!t) return;
     t.status = t.status === '完成' ? '未開始' : '完成';
-    t.status === '完成' ? sfx.check() : sfx.uncheck();
+    t.status === '完成' ? sfx.done() : sfx.undone();
     commit();
   }
   function deleteTask(id) {
@@ -2425,7 +2616,7 @@
         else if (a === 'del') { ctl.close(); deleteTask(t.id); }
         else if (a === 'mv') { t.sched = dayOf(el.dataset.to); commit(); render(); toast(t.sched ? `已移到 ${mmdd(t.sched)}` : '已改成無日期'); }
         else if (a === 'cp') copyTo(dayOf(el.dataset.to));
-        else if (a === 'sub-tog') { const s = t.subs.find((q) => q.id === el.dataset.sid); if (s) { s.done = !s.done; commit(); render(); } }
+        else if (a === 'sub-tog') { const s = t.subs.find((q) => q.id === el.dataset.sid); if (s) { s.done = !s.done; s.done ? sfx.done() : sfx.undone(); commit(); render(); } }
         else if (a === 'sub-del') { t.subs = t.subs.filter((q) => q.id !== el.dataset.sid); commit(); render(); }
         else if (a === 'fo-add') {
           const n = new Date(), e0 = Math.floor((n.getHours() * 60 + n.getMinutes()) / 5) * 5;   // 預設：剛剛那 30 分鐘（取到 5 分）
@@ -2590,7 +2781,7 @@
       t.sched = ui.calDay; sfx.check(); commit();
       toast(`已排到 ${ui.calDay === ymd(new Date()) ? '今天' : mmdd(ui.calDay)}`, () => { t.sched = ''; commit(); });
     }
-    else if (a === 'sub-tog') { const s = task(el.dataset.id)?.subs?.find((q) => q.id === el.dataset.sid); if (s) { s.done = !s.done; commit(); } }
+    else if (a === 'sub-tog') { const s = task(el.dataset.id)?.subs?.find((q) => q.id === el.dataset.sid); if (s) { s.done = !s.done; s.done ? sfx.done() : sfx.undone(); commit(); } }
     else if (a === 'sub-fold') { lfFold('s:' + el.dataset.id); sfx.tick(); renderCal(); $(`#lf-cal [data-act="sub-fold"][data-id="${el.dataset.id}"]`)?.focus({ preventScroll: true }); }
     else if (a === 'cat-fold') { lfFold(el.dataset.c); if (ui.addCat === el.dataset.c) ui.addCat = null; sfx.tick?.(); renderCal(); $(`#lf-cal [data-act="cat-fold"][data-c="${el.dataset.c}"]`)?.focus({ preventScroll: true }); }
     else if (a === 'add-pri') {                    // 新增任務時先選優先級：選了就一直用，直到關掉這個新增欄
@@ -2611,7 +2802,7 @@
     }
     else if (a === 'habit-tog') {
       const x = state.habits.find((q) => q.id === el.dataset.id), d = el.dataset.d; if (!x) return;
-      if (x.log[d]) delete x.log[d]; else x.log[d] = 1;
+      if (x.log[d]) { delete x.log[d]; sfx.undone(); } else { x.log[d] = 1; sfx.done(); }
       commit();
     }
     else if (a === 'habit-del') {
@@ -2814,7 +3005,7 @@
     show('dash');
     dash.scrollTop = 0;
     if (animate) {
-      sfx.ready();
+      if (!state.sfx.on) [523, 659, 784, 1046].forEach((f, i) => beep(f, 0.1, 0.035, i * 0.09));   // 進場和弦（開機選了自己的聲音就不放）
       dash.classList.remove('enter'); void dash.offsetWidth; dash.classList.add('enter');
     }
   }

@@ -581,6 +581,31 @@ details.grp ul { padding-left: 22px; }
 .seg button:hover, .seg button:focus-visible { border-color: var(--cyan); outline: 0; }
 .seg button.on { background: var(--yel); border-color: var(--yel); color: #0a0a0a; }
 .snd-l { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--dim); margin-bottom: 6px; padding-top: 8px; border-top: 2px dashed var(--line); }
+.snd-lib { margin-top: 4px; padding-top: 6px; border-top: 2px dashed var(--line); }
+
+/* 音效庫（11/26） */
+.modal-box.sl { --kc: var(--cyan); width: min(560px, 100%); }
+.sl-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 16px 0 6px; font-family: var(--f-px); font-size: 9px; letter-spacing: 2px; color: var(--dim); }
+.sl-evs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.sl-ev { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sl-ev span { flex: 0 0 4.6em; font-size: 14px; color: var(--dim); }
+.sl-ev select { flex: 1; min-width: 0; }
+.sl-fs { max-height: 46vh; overflow-y: auto; border-top: 2px dashed var(--line); margin-bottom: 14px; }
+.sl-f { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 2px dotted #1f1b40; }
+.sl-f.on { background: rgba(0, 240, 255, .06); }
+.sl-n { flex: 1; min-width: 0; text-align: left; font-size: 15px; color: var(--txt); overflow-wrap: anywhere; padding: 4px 2px; }
+.sl-n:hover, .sl-n:focus-visible, .sl-f.on .sl-n { color: var(--cyan); outline: 0; }
+.sl-use { flex: none; font-style: normal; font-size: 12px; color: #0a0a0a; background: var(--yel); padding: 1px 5px; }
+.sl-d { flex: none; font-size: 12px; color: #55517a; min-width: 3.4em; text-align: right; }
+.sl-ed { display: flex; flex-direction: column; gap: 8px; padding: 10px 4px 12px; border-bottom: 2px dotted #1f1b40; background: rgba(0, 240, 255, .06); }
+.sl-wave { display: block; width: 100%; height: 72px; background: #0b0a18; border: 2px solid var(--line); touch-action: none; cursor: ew-resize; }
+.sl-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sl-tools .sp { flex: 1; }
+.sl-t, .sl-g { font-size: 13px; color: var(--dim); }
+.sl-g { min-width: 3.8em; text-align: center; }
+.sl-up { cursor: pointer; font-family: inherit; letter-spacing: 0; }
+.sl-empty { padding: 12px 2px; color: var(--dim); }
+@media (max-width: 520px) { .sl-evs { grid-template-columns: 1fr; } .sl-fs { max-height: none; } }
 
 /* ───────── RWD ───────── */
 @media (max-width: 1000px) {

@@ -5,7 +5,9 @@
 - GET  /api/state  讀取 data.json（還沒有資料時回傳 null）
 - PUT  /api/state  把看板目前的資料寫回 data.json（每天第一次寫入前，先備份到 backups/）
 - GET  /api/rev    只回傳目前的版本號與存檔時間（給多裝置同步用，很輕）
-- GET  /api/sounds 列出 sounds/ 資料夾裡的音檔（音效庫：把 mp3/wav/ogg/m4a 丟進去就會出現在音色清單）
+- GET  /api/sounds 列出 sounds/ 資料夾裡的音檔 [{n: 檔名, v: 版本}]（音效庫：把 mp3/wav/ogg/m4a 丟進去就會出現在音色清單）
+  POST /api/sounds?name=檔名（內容＝音檔本身，最多 8 MB，同名自動加編號）、/api/sounds/rename {from, to}、
+  /api/sounds/delete {name}（移到 sounds/.trash，可以復原）、/api/sounds/restore {name}
 - GET  /api/update 版本與自動更新狀態；POST /api/update 立刻檢查更新（只有 Windows 版、由 boot.py 啟動時才會更新）
 - POST /api/quit   關掉伺服器（boot.py 啟動時才有，給「關閉看板」用）
 - GET  /api/lan    手機連線狀態；POST /api/lan {"on": true/false} 開關（只有電腦本機能改，改完自動重開）；GET /api/lan/qr.svg 手機掃的 QR code
@@ -31,6 +33,7 @@ import io
 import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -41,6 +44,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import unicodedata
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 for _n in ("stdout", "stderr"):                    # pythonw（Windows 沒有主控台）時 sys.stderr 是 None，寫 log 會出錯
@@ -59,6 +63,8 @@ DATA = os.path.join(DATA_DIR, "data.json")
 BACKUPS = os.path.join(DATA_DIR, "backups")
 SOUNDS = os.path.join(ROOT, "sounds")
 AUDIO_EXT = (".mp3", ".wav", ".ogg", ".m4a")
+TRASH = os.path.join(SOUNDS, ".trash")              # 刪掉的音檔先放這裡（可以復原），只留最近 30 個
+MAX_SOUND = 8 * 1024 * 1024
 MAX_BODY = 20 * 1024 * 1024
 KEEP_BACKUPS = 30
 LOCK = threading.RLock()                           # 讀寫 data.json 都要拿鎖：Windows 上檔案正被讀的時候不能換掉
@@ -585,6 +591,35 @@ def code_ver():
     return hashlib.md5("|".join(parts).encode()).hexdigest()[:10]
 
 
+def sound_name(n):
+    """音檔檔名清乾淨：只能是單純的檔名（不能有路徑）、副檔名要是音檔、不能是隱藏檔；不合格回 None"""
+    n = unicodedata.normalize("NFC", str(n or "")).strip()
+    n = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", n).strip(" .")
+    if not n or len(n) > 80 or os.path.splitext(n)[1].lower() not in AUDIO_EXT or not os.path.splitext(n)[0].strip():
+        return None
+    return n
+
+
+def sound_taken(n, but=None):
+    """sounds/ 裡有沒有同名的（不分大小寫：Windows、Mac 的檔案系統都不分）"""
+    if not os.path.isdir(SOUNDS):
+        return False
+    low = n.lower()
+    return any(x.lower() == low and x != but for x in os.listdir(SOUNDS))
+
+
+def sound_list():
+    out = []
+    if os.path.isdir(SOUNDS):
+        for n in sorted(os.listdir(SOUNDS)):
+            p = os.path.join(SOUNDS, n)
+            if n.startswith(".") or not n.lower().endswith(AUDIO_EXT) or not os.path.isfile(p):
+                continue
+            st = os.stat(p)
+            out.append({"n": unicodedata.normalize("NFC", n), "v": "%x%x" % (st.st_mtime_ns // 1000000, st.st_size)})
+    return out
+
+
 def meta(state):
     state = state or {}
     return {"rev": int(state.get("_rev") or 0), "savedAt": state.get("_savedAt") or "", "by": state.get("_by") or ""}
@@ -762,10 +797,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/update":
                 return self._json(200, UPDATER.info())
             if path == "/api/sounds":
-                names = []
-                if os.path.isdir(SOUNDS):
-                    names = sorted(n for n in os.listdir(SOUNDS) if n.lower().endswith(AUDIO_EXT) and not n.startswith("."))
-                return self._json(200, names)
+                return self._json(200, sound_list())
             if path in ("/api/state", "/api/rev"):
                 try:
                     state = read_state()
@@ -806,6 +838,10 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(200, {"ok": True})
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
+        if path.startswith("/api/sounds"):
+            if not self._host_ok():
+                return self._json(403, {"error": "forbidden host"})
+            return self._sounds(path)
         if path != "/api/state":
             return self._json(404, {"error": "not found"})
         if not self._host_ok():
@@ -848,6 +884,70 @@ class Handler(SimpleHTTPRequestHandler):
                 json.dump(state, f, ensure_ascii=False, indent=1)
             replace_file(tmp, DATA)
             return self._json(200, dict(meta(state), ok=True))
+
+    def _sounds(self, path):
+        """音效庫：上傳、改名、刪除（移到 .trash）、復原。檔名一律過 sound_name()，只能動 sounds/ 裡的檔"""
+        length = int(self.headers.get("Content-Length") or 0)
+        if path == "/api/sounds":
+            name = sound_name(urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("name", [""])[0])
+            if not name:
+                return self._json(400, {"error": "檔名要是 mp3、wav、ogg 或 m4a"})
+            if length <= 0 or length > MAX_SOUND:
+                return self._json(413, {"error": "音檔最多 8 MB"})
+            data = self.rfile.read(length)
+            with LOCK:
+                os.makedirs(SOUNDS, exist_ok=True)
+                stem, ext = os.path.splitext(name)
+                final, i = name, 2
+                while sound_taken(final):
+                    final, i = "%s %d%s" % (stem, i, ext), i + 1
+                tmp = os.path.join(SOUNDS, ".up-" + secrets.token_hex(4))
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                replace_file(tmp, os.path.join(SOUNDS, final))
+            return self._json(200, {"ok": True, "name": final})
+        if length > 4000:
+            return self._json(413, {"error": "bad size"})
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            return self._json(400, {"error": "bad json"})
+        with LOCK:
+            if path == "/api/sounds/rename":
+                a = sound_name(body.get("from"))
+                to = str(body.get("to") or "").strip()
+                if a and to and os.path.splitext(to)[1].lower() not in AUDIO_EXT:
+                    to += os.path.splitext(a)[1]
+                b = sound_name(to)
+                if not a or not b:
+                    return self._json(400, {"error": "檔名不能空白，也不能有 / \\ : * ? \" < > |"})
+                if not os.path.isfile(os.path.join(SOUNDS, a)):
+                    return self._json(404, {"error": "找不到這個音檔"})
+                if a != b and sound_taken(b, a):
+                    return self._json(409, {"error": "已經有「%s」了" % b})
+                os.rename(os.path.join(SOUNDS, a), os.path.join(SOUNDS, b))
+                return self._json(200, {"ok": True, "name": b})
+            if path in ("/api/sounds/delete", "/api/sounds/restore"):
+                n = sound_name(body.get("name"))
+                if not n:
+                    return self._json(400, {"error": "bad name"})
+                live, dead = os.path.join(SOUNDS, n), os.path.join(TRASH, n)
+                if path.endswith("delete"):
+                    if not os.path.isfile(live):
+                        return self._json(404, {"error": "找不到這個音檔"})
+                    os.makedirs(TRASH, exist_ok=True)
+                    replace_file(live, dead)
+                    old = sorted((os.path.getmtime(os.path.join(TRASH, x)), x) for x in os.listdir(TRASH))
+                    for _, x in old[:-30]:
+                        os.remove(os.path.join(TRASH, x))
+                    return self._json(200, {"ok": True})
+                if not os.path.isfile(dead):
+                    return self._json(404, {"error": "已經救不回來了"})
+                if sound_taken(n):
+                    return self._json(409, {"error": "已經有「%s」了" % n})
+                replace_file(dead, live)
+                return self._json(200, {"ok": True})
+        return self._json(404, {"error": "not found"})
 
     do_PUT = _write_state
     do_POST = _write_state
