@@ -136,7 +136,7 @@
     if (!state.wallet) { state.wallet = { rates: JSON.parse(JSON.stringify(RATE0)), base: [], log: [], habitV: 1, pmV: 1 }; state.wallet.base = rewardables().map((w) => w[0]); }
     const W = state.wallet;
     W.rates ||= {}; W.rates.types ||= {}; W.base ||= []; W.log ||= [];
-    for (const k of ['other', 'project', 'am', 'pm', 'late', 'lateFee', 'habit', 'daily', 'review', 'focus', 'wake']) W.rates[k] ??= RATE0[k];
+    for (const k of ['other', 'project', 'am', 'pm', 'late', 'lateFee', 'habit', 'daily', 'daily0', 'review', 'focus', 'wake']) W.rates[k] ??= RATE0[k];
     if (!W.pmV) { if (W.rates.pm === 10) W.rates.pm = 30; W.pmV = 1; }   // 11/19：睡前完成晚間關機程序改成 $30
     /* LIFE 區：習慣、每日紀錄（日記／三餐／體重／睡眠）、專注紀錄；任務的完成時間 doneAt（印記用） */
     state.habits ||= [];
@@ -171,7 +171,7 @@
   const rtLocked = (kind) => Date.now() >= rtEnd(kind).getTime();     // 過了時間（名稱沿用，現在只代表「不給獎勵了」）
   const rtAll = (kind) => { const it = state.routines[kind] || []; return it.length > 0 && it.every((t) => day[kind][t]); };
   const rtOnTime = (kind) => rtAll(kind) && (day[kind + 'At'] ?? 0) < rtEnd(kind).getTime();
-  const RATE0 = { types: { '行動': 10, '里程碑': 50, '待確認': 5 }, other: 10, project: 300, am: 10, pm: 30, late: 5, habit: 5, daily: 10, review: 30, focus: 1, wake: 50, lateFee: 5 };   // late＝專案逾期結案每天少幾 %；lateFee＝任務逾期每天扣幾元
+  const RATE0 = { types: { '行動': 10, '里程碑': 50, '待確認': 5 }, other: 10, project: 300, am: 10, pm: 30, late: 5, habit: 5, daily: 10, daily0: 5, review: 30, focus: 1, wake: 50, lateFee: 5 };   // daily＝有優先級的每日任務基準（! 起算），daily0＝沒優先級的   // late＝專案逾期結案每天少幾 %；lateFee＝任務逾期每天扣幾元
   function rewardables() {                       // 目前「已完成」的項目 → [編號, 金額, 說明]
     const R = state.wallet.rates, out = [], now = ymd(new Date());
     /* 專案逾期結案：超過期限每一天少 R.late %，最低 1 元（入帳當下算一次，之後不再變）。任務逾期改成每天扣款（lateFees） */
@@ -182,12 +182,12 @@
       return [got, `${note}（逾期 ${d} 天，${money(base)} → ${money(got)}）`];
     };
     /* 每日任務照優先級加成：! +10%、!! +20%、!!! +30%（11/23 使用者要求，最多 30%），先加成再算逾期 */
-    const priUp = (t) => { const n = Math.min(3, Math.max(0, +t.pri || 0)); return n ? [Math.round(R.daily * (1 + n / 10)), `（${'!'.repeat(n)} +${n * 10}%）`] : [R.daily, '']; };
+    const priUp = (t) => { const n = Math.min(3, Math.max(0, +t.pri || 0)); return n ? [Math.round(R.daily * (1 + n / 10)), `（${'!'.repeat(n)} +${n * 10}%）`] : [R.daily0, '']; };   // 11/27：沒優先級的另外算（$5），$10 基準是給有優先級的
     /* 11/27 任務逾期完成：只拿原價（每日任務不加成），逾期的天數另外每天扣 R.lateFee（lateFees） */
     for (const t of state.tasks) if (t.status === '完成') {
       const d = t.sched ? dayDiff(t.sched, now) : 0, tail = d > 0 ? `（逾期 ${d} 天）` : '', nm = t.name || '（未命名）';
       if (state.projects.some((p) => p.id === t.p)) out.push(['t:' + t.id, Math.max(0, Math.round(+(R.types[t.type] ?? R.other) || 0)), `${t.type || '任務'}：${nm}${tail}`]);
-      else out.push(['t:' + t.id, ...(d > 0 ? [R.daily, `每日任務：${nm}${tail}`] : [priUp(t)[0], `每日任務：${nm}${priUp(t)[1]}`])]);   // 沒掛專案的算每日任務
+      else out.push(['t:' + t.id, ...(d > 0 ? [+t.pri > 0 ? R.daily : R.daily0, `每日任務：${nm}${tail}`] : [priUp(t)[0], `每日任務：${nm}${priUp(t)[1]}`])]);   // 沒掛專案的算每日任務
     }
     for (const p of state.projects) if (p.status === '已結案') out.push(['p:' + p.id, ...late(R.project, p.due, `專案結案：${p.name || '（未命名）'}`)]);
     for (const hb of state.habits || []) for (const d in hb.log || {}) out.push([`h:${hb.id}:${d}`, R.habit, `習慣：${hb.name}`]);   // 每個習慣每天一筆
@@ -1313,7 +1313,8 @@
   function openRates(fromWallet) {
     const R = () => state.wallet.rates;
     const fields = () => [
-      { k: 'daily', l: '每日任務（優先級每級 +10%）', v: R().daily },
+      { k: 'daily0', l: '每日任務（沒有優先級）', v: R().daily0 },
+      { k: 'daily', l: '每日任務（有優先級，每級 +10%）', v: R().daily },
       ...O.tType.map((o) => ({ k: 't:' + o.n, l: `專案「${o.n}」`, v: R().types[o.n] ?? R().other })),
       { k: 'project', l: '專案結案', v: R().project },
       { k: 'wake', l: '開始今日（05:30）', v: R().wake },
