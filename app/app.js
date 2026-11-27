@@ -136,7 +136,7 @@
     if (!state.wallet) { state.wallet = { rates: JSON.parse(JSON.stringify(RATE0)), base: [], log: [], habitV: 1, pmV: 1 }; state.wallet.base = rewardables().map((w) => w[0]); }
     const W = state.wallet;
     W.rates ||= {}; W.rates.types ||= {}; W.base ||= []; W.log ||= [];
-    for (const k of ['other', 'project', 'am', 'pm', 'late', 'habit', 'daily', 'review', 'focus', 'wake']) W.rates[k] ??= RATE0[k];
+    for (const k of ['other', 'project', 'am', 'pm', 'late', 'lateFee', 'habit', 'daily', 'review', 'focus', 'wake']) W.rates[k] ??= RATE0[k];
     if (!W.pmV) { if (W.rates.pm === 10) W.rates.pm = 30; W.pmV = 1; }   // 11/19：睡前完成晚間關機程序改成 $30
     /* LIFE 區：習慣、每日紀錄（日記／三餐／體重／睡眠）、專注紀錄；任務的完成時間 doneAt（印記用） */
     state.habits ||= [];
@@ -171,10 +171,10 @@
   const rtLocked = (kind) => Date.now() >= rtEnd(kind).getTime();     // 過了時間（名稱沿用，現在只代表「不給獎勵了」）
   const rtAll = (kind) => { const it = state.routines[kind] || []; return it.length > 0 && it.every((t) => day[kind][t]); };
   const rtOnTime = (kind) => rtAll(kind) && (day[kind + 'At'] ?? 0) < rtEnd(kind).getTime();
-  const RATE0 = { types: { '行動': 10, '里程碑': 50, '待確認': 5 }, other: 10, project: 300, am: 10, pm: 30, late: 5, habit: 5, daily: 10, review: 30, focus: 1, wake: 50 };   // late＝逾期完成每天少幾 %
+  const RATE0 = { types: { '行動': 10, '里程碑': 50, '待確認': 5 }, other: 10, project: 300, am: 10, pm: 30, late: 5, habit: 5, daily: 10, review: 30, focus: 1, wake: 50, lateFee: 5 };   // late＝專案逾期結案每天少幾 %；lateFee＝任務逾期每天扣幾元
   function rewardables() {                       // 目前「已完成」的項目 → [編號, 金額, 說明]
     const R = state.wallet.rates, out = [], now = ymd(new Date());
-    /* 逾期完成：超過排定日期／期限每一天少 R.late %，最低 1 元（入帳當下算一次，之後不再變） */
+    /* 專案逾期結案：超過期限每一天少 R.late %，最低 1 元（入帳當下算一次，之後不再變）。任務逾期改成每天扣款（lateFees） */
     const late = (amt, due, note) => {
       const d = due ? dayDiff(due, now) : 0, base = Math.max(0, Math.round(+amt || 0));
       if (d <= 0 || !R.late || base <= 1) return [base, note];
@@ -183,7 +183,12 @@
     };
     /* 每日任務照優先級加成：! +10%、!! +20%、!!! +30%（11/23 使用者要求，最多 30%），先加成再算逾期 */
     const priUp = (t) => { const n = Math.min(3, Math.max(0, +t.pri || 0)); return n ? [Math.round(R.daily * (1 + n / 10)), `（${'!'.repeat(n)} +${n * 10}%）`] : [R.daily, '']; };
-    for (const t of state.tasks) if (t.status === '完成') out.push(['t:' + t.id, ...(state.projects.some((p) => p.id === t.p) ? late(R.types[t.type] ?? R.other, t.sched, `${t.type || '任務'}：${t.name || '（未命名）'}`) : late(priUp(t)[0], t.sched, `每日任務：${t.name || '（未命名）'}${priUp(t)[1]}`))]);   // 沒掛專案的算每日任務
+    /* 11/27 任務逾期完成：只拿原價（每日任務不加成），逾期的天數另外每天扣 R.lateFee（lateFees） */
+    for (const t of state.tasks) if (t.status === '完成') {
+      const d = t.sched ? dayDiff(t.sched, now) : 0, tail = d > 0 ? `（逾期 ${d} 天）` : '', nm = t.name || '（未命名）';
+      if (state.projects.some((p) => p.id === t.p)) out.push(['t:' + t.id, Math.max(0, Math.round(+(R.types[t.type] ?? R.other) || 0)), `${t.type || '任務'}：${nm}${tail}`]);
+      else out.push(['t:' + t.id, ...(d > 0 ? [R.daily, `每日任務：${nm}${tail}`] : [priUp(t)[0], `每日任務：${nm}${priUp(t)[1]}`])]);   // 沒掛專案的算每日任務
+    }
     for (const p of state.projects) if (p.status === '已結案') out.push(['p:' + p.id, ...late(R.project, p.due, `專案結案：${p.name || '（未命名）'}`)]);
     for (const hb of state.habits || []) for (const d in hb.log || {}) out.push([`h:${hb.id}:${d}`, R.habit, `習慣：${hb.name}`]);   // 每個習慣每天一筆
     for (const r of state.reviews || []) if (r.done) out.push(['r:' + r.id, R.review, `每週復盤：${(r.name || '').replace('每週復盤｜', '') || '（未命名）'}`]);
@@ -213,13 +218,32 @@
     const hm = `${pad(t.getHours())}:${pad(t.getMinutes())}`;
     return amt ? [amt, `開始今日 ${hm}（${diff ? `${diff > 0 ? '早' : '晚'} ${Math.abs(diff)} 分${pct ? `，${pct > 0 ? '+' : ''}${pct}%` : ''}` : '準時'}）`] : null;
   }
+  /* 任務逾期扣款（11/27 使用者要求，每天自動扣）：排定日期（sched）的隔天起，到做完那天（還沒做完＝到今天）每天扣 R.lateFee。
+     建立時已經過了排定日期的（補登），從建立的隔天才算。已放棄的不扣。扣過的不退（改期、刪除、取消完成都一樣），
+     每一天一個編號 late:<任務>:<日期>，記在紀錄的 refs，同一天不會扣兩次 */
+  const nextDay = (k) => { const [y, m, d] = k.split('-').map(Number); return ymd(new Date(y, m - 1, d + 1)); };
+  const bornDay = (t) => { const ms = parseInt(String(t.id).slice(1, -3), 36); return ms > 1.6e12 && ms < Date.now() + 864e5 ? ymd(new Date(ms)) : ''; };
+  function feeDays(t, now) {
+    if (!t.sched || t.status === '已放棄') return [];
+    const end = t.status === '完成' ? (t.doneAt ? ymd(new Date(t.doneAt)) : '') : now;
+    const b = bornDay(t);
+    let k = nextDay(b && b > t.sched ? b : t.sched);
+    const out = [];
+    while (end && k <= end && out.length < 400) { out.push(k); k = nextDay(k); }
+    return out;
+  }
+  function lateFees() {                          // 還沒扣的 → [[任務, [日期…]]]
+    const R = state.wallet.rates; if (!(R.lateFee > 0)) return [];
+    const now = ymd(new Date()), paid = new Set(state.wallet.log.flatMap((e) => e.refs || []));
+    return state.tasks.map((t) => [t, feeDays(t, now).filter((d) => !paid.has(`late:${t.id}:${d}`))]).filter(([, ds]) => ds.length);
+  }
   function settle() {
     const stampAt = Date.now();                    // 完成時間：勾完成蓋上，取消就拿掉
     for (const t of state.tasks) { if (t.status === '完成') { if (t.doneAt == null) t.doneAt = stampAt; } else if (t.doneAt != null) delete t.doneAt; }
     for (const k of ['am', 'pm']) { if (rtAll(k)) day[k + 'At'] ??= stampAt; else delete day[k + 'At']; }   // routine 全部勾完的時間
     const W = state.wallet, want = rewardables(), wantSet = new Set(want.map((w) => w[0]));
     const have = new Set(W.log.filter((e) => e.ref).map((e) => e.ref)), base = new Set(W.base);
-    const r = { gain: 0, loss: 0, note: '', n: 0 };
+    const r = { gain: 0, loss: 0, note: '', n: 0, fee: 0, nf: 0 };
     for (const [ref, amt, note] of want) {
       if (have.has(ref) || base.has(ref)) continue;
       const a = Math.max(0, Math.round(+amt || 0));
@@ -235,8 +259,32 @@
     };
     W.log = W.log.filter((e) => { if (!e.ref || wantSet.has(e.ref) || !alive(e.ref)) return true; r.loss += e.amt; return false; });
     W.base = W.base.filter((ref) => wantSet.has(ref) || !alive(ref));
+    /* 兩台裝置各自扣了同一天（離線時）：後面那筆拿掉重複的天數、按比例退回 */
+    const seen = new Set();
+    for (const e of W.log) if (e.refs) {
+      const keep = e.refs.filter((x) => !seen.has(x));
+      keep.forEach((x) => seen.add(x));
+      if (keep.length !== e.refs.length) { e.amt = Math.round(e.amt / e.refs.length * keep.length); e.refs = keep; }
+    }
+    W.log = W.log.filter((e) => !e.refs || e.refs.length);
+    /* 11/27 規則改的那天：之前逾期完成、拿到的錢比原價多的（加成沒被逾期打折吃掉），差額扣回來（只做一次） */
+    if (!W.lateV) {
+      for (const t of state.tasks) {
+        const e = t.status === '完成' && t.doneAt && t.sched && ymd(new Date(t.doneAt)) > t.sched && W.log.find((x) => x.ref === 't:' + t.id);
+        const fair = e && Math.max(0, Math.round(+(state.projects.some((p) => p.id === t.p) ? R0().types[t.type] ?? R0().other : R0().daily) || 0));
+        if (e && e.amt > fair) { W.log.push({ id: 'e:adj:t:' + t.id, at: stampAt, amt: fair - e.amt, note: `逾期取消加成：${t.name || '（未命名）'}`, fix: 1 }); r.fee += fair - e.amt; r.nf++; }
+      }
+      W.lateV = 1;
+    }
+    for (const [t, ds] of lateFees()) {
+      const amt = -state.wallet.rates.lateFee * ds.length, a = mmdd(ds[0]), z = mmdd(ds[ds.length - 1]);
+      W.log.push({ id: `e:late:${t.id}:${ds[0]}:${ds.length}`, refs: ds.map((d) => `late:${t.id}:${d}`), at: stampAt, amt,
+        note: `逾期扣款：${t.name || '（未命名）'}（${ds.length > 1 ? `${a}–${z}，${ds.length} 天` : a}）` });
+      r.fee += amt; r.nf++;
+    }
     return r;
   }
+  const R0 = () => state.wallet.rates;
   const foCents = () => (state.focus || []).reduce((n, f) => n + (f.pct ? f.min * f.pct : 0), 0);   // 專注累積的獎勵（單位：分＝1/100 元）
   const cents = (c) => '$' + (c / 100).toFixed(2);
   const balance = () => state.wallet.log.reduce((n, e) => n + e.amt, 0);
@@ -265,9 +313,11 @@
   }
   function save() {
     const got = settle();
-    if (got.gain || got.loss) {
+    if (got.gain || got.loss || got.fee) {
+      const fee = got.fee ? `逾期扣款 ${money(got.fee)}${got.nf > 1 ? `（${got.nf} 個任務）` : ''}` : '';
       if (got.gain) coinFx(got.gain); else updateCoin(true);
-      if (got.gain) { if (!evOwn('earn')) [988, 1319].forEach((f, i) => beep(f, i ? 0.22 : 0.07, 0.04, i * 0.07)); toast(`＋${money(got.gain)}　${got.n > 1 ? got.n + ' 個項目完成' : got.note}`, null, 3200); }
+      if (got.gain) { if (!evOwn('earn')) [988, 1319].forEach((f, i) => beep(f, i ? 0.22 : 0.07, 0.04, i * 0.07)); toast(`＋${money(got.gain)}　${got.n > 1 ? got.n + ' 個項目完成' : got.note}${fee ? '　' + fee : ''}`, null, 3200); }
+      else if (fee) { sfx.deny(); toast(fee, null, 4200); }
       else toast(`已收回 ${money(got.loss)}（取消完成）`, null, 2600);
     }
     try { localStorage.setItem('kos.state', JSON.stringify(state)); } catch (e) { /* ignore */ }
@@ -1173,7 +1223,7 @@
       const earn = mon.reduce((n, e) => n + Math.max(0, e.amt), 0), spent = mon.reduce((n, e) => n + Math.max(0, -e.amt), 0);
       const rows = W.log.filter((e) => e.amt).slice(-60).reverse().map((e) => `
         <div class="wl-row"><span class="wl-at">${fmtAt(e.at)}</span><span class="wl-note">${esc(e.note)}</span><b class="${e.amt < 0 ? 'wl-out' : 'wl-in'}">${e.amt < 0 ? '-' : '+'}${money(Math.abs(e.amt))}</b>${
-          e.ref ? '<span class="wl-x"></span>' : `<button class="x" data-act="del-spend" data-id="${e.id}" aria-label="${e.buy ? '退貨' : '刪除這筆花費'}：${esc(e.note)}">X</button>`}</div>`).join('');
+          e.ref || e.refs || e.fix ? '<span class="wl-x"></span>' : `<button class="x" data-act="del-spend" data-id="${e.id}" aria-label="${e.buy ? '退貨' : '刪除這筆花費'}：${esc(e.note)}">X</button>`}</div>`).join('');
       return `
         <p class="rt-sub">完成就自動入帳；專注照時長累積，滿 $1 入帳。1 點＝NT$1。</p>
         <div class="wl-stat"><span>本月獲得<b class="wl-in">+${money(earn)}</b></span><span>本月花費<b class="wl-out">-${money(spent)}</b></span>${foCents() ? `<span>專注累積<b class="wl-in">${cents(foCents() % 100)}</b></span>` : ''}</div>
@@ -1272,13 +1322,14 @@
       { k: 'habit', l: '習慣（每個每天）', v: R().habit },
       { k: 'review', l: '每週復盤', v: R().review },
       { k: 'focus', l: '專注（分鐘數的 %）', v: R().focus },
-      { k: 'late', l: '逾期每天扣 %', v: R().late }
+      { k: 'lateFee', l: '任務逾期每天扣', v: R().lateFee },
+      { k: 'late', l: '專案逾期結案每天少 %', v: R().late }
     ];
     const render = () => {
       box.innerHTML = `
         <div class="rt-head">REWARDS</div>
         <h3 class="rt-title">獎勵金額</h3>
-        <p class="rt-sub">單位 NT$，只影響之後完成的項目。逾期最低剩 $1。</p>
+        <p class="rt-sub">單位 NT$，只影響之後完成的項目。</p>
         <div class="wl-rates">${fields().map((f) => `<label class="wl-rate"><span>${esc(f.l)}</span><input class="in" type="number" inputmode="numeric" min="0" step="1" data-rate="${esc(f.k)}" value="${f.v}"></label>`).join('')}</div>
         <div class="rt-foot"><button class="btn btn-ghost" data-act="reset">恢復建議值</button><span class="sp"></span><button class="btn" data-act="close">完成</button></div>`;
     };
@@ -3040,6 +3091,7 @@
   if (seeded) save();                      // 第一次啟動：把初始資料寫成 data.json
   if (bootOff) { setNet(false); setNet(false); dirty = true; saveTimer = setTimeout(push, 5000); }   // 打開時連不到主機：一直重試，連上就送
   else if (bootPush) { save(); toast('上次沒存到主機的修改已補送'); }
+  else if (lateFees().length || !state.wallet.lateV) save();
   renderOff(); updateHud();
   if (day.phase === 'on') enterDash(false); else { show('off'); $('#logo-in')?.focus(); }
   /* 只有一個每秒的計時器：時鐘每秒、問主機版本號每 5 秒。分頁在背景時全部停掉 */
