@@ -181,8 +181,8 @@
       const got = Math.max(1, Math.round(base * (1 - d * R.late / 100)));
       return [got, `${note}（逾期 ${d} 天，${money(base)} → ${money(got)}）`];
     };
-    /* 每日任務照優先級加成：! +10%、!! +20%、!!! +30%（11/23 使用者要求，最多 30%），先加成再算逾期 */
-    const priUp = (t) => { const n = Math.min(3, Math.max(0, +t.pri || 0)); return n ? [Math.round(R.daily * (1 + n / 10)), `（${'!'.repeat(n)} +${n * 10}%）`] : [R.daily0, '']; };   // 11/27：沒優先級的另外算（$5），$10 基準是給有優先級的
+    /* 每日任務照優先級：沒有 $5（daily0）、! $10（daily）、!! +10%、!!! +20%（11/27 使用者改）；逾期做完不加成 */
+    const priUp = (t) => { const n = Math.min(3, Math.max(0, +t.pri || 0)); return n ? [Math.round(R.daily * (1 + (n - 1) / 10)), n > 1 ? `（${'!'.repeat(n)} +${(n - 1) * 10}%）` : ''] : [R.daily0, '']; };   // 11/27：! 就是 $10 基準，!! +10%、!!! +20%；沒優先級的另外算（$5）
     /* 11/27 任務逾期完成：只拿原價（每日任務不加成），逾期的天數另外每天扣 R.lateFee（lateFees） */
     for (const t of state.tasks) if (t.status === '完成') {
       const d = t.sched ? dayDiff(t.sched, now) : 0, tail = d > 0 ? `（逾期 ${d} 天）` : '', nm = t.name || '（未命名）';
@@ -1314,7 +1314,7 @@
     const R = () => state.wallet.rates;
     const fields = () => [
       { k: 'daily0', l: '每日任務（沒有優先級）', v: R().daily0 },
-      { k: 'daily', l: '每日任務（有優先級，每級 +10%）', v: R().daily },
+      { k: 'daily', l: '每日任務（!，每多一級 +10%）', v: R().daily },
       ...O.tType.map((o) => ({ k: 't:' + o.n, l: `專案「${o.n}」`, v: R().types[o.n] ?? R().other })),
       { k: 'project', l: '專案結案', v: R().project },
       { k: 'wake', l: '開始今日（05:30）', v: R().wake },
